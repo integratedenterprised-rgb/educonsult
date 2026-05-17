@@ -1,0 +1,2624 @@
+// =============================================================================
+//  Educational Consultancy CMS — Database Schema
+//
+//  Design pillars:
+//   - Everything visible on the frontend is editable from the admin panel.
+//   - Fully relational, normalized.
+//   - SEO-first: every public entity has an optional SeoMeta record.
+//   - Slug system: canonical slug on parent; localized slug per translation.
+//   - Workflow: DRAFT → SCHEDULED → PUBLISHED → ARCHIVED via `ContentStatus`.
+//   - Soft delete: `deletedAt DateTime?` on all content; filtered at the
+//     data-access layer (Prisma has no global soft-delete filter yet).
+//   - Versioning: snapshot tables (`*Version`) on heavy editing surfaces.
+//   - Multilingual-ready: per-entity `*Translation` tables keyed by
+//     (entityId, locale). The canonical-locale fields live on the parent row
+//     so the public site has a single fallback path; translations override.
+//
+//  Transitional notes:
+//   - `Page.sections` (Json) and inlined SEO fields on Page exist alongside
+//     the new relational `Page.sectionRows` + `SeoMeta` model while the
+//     editor migration completes. See MIGRATION-STRATEGY.md.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// -----------------------------------------------------------------------------
+//  Enums
+// -----------------------------------------------------------------------------
+
+enum ContentStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHED
+  ARCHIVED
+}
+
+enum Locale {
+  EN
+  NE
+  HI
+  ZH
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  EDITOR
+  AUTHOR
+  COUNSELOR
+  VIEWER
+}
+
+enum SectionType {
+  HERO
+  RICH_TEXT
+  CTA
+  COUNTRY_GRID
+  ELIGIBILITY
+  VISA_RISK
+  COURSE_PATHWAYS
+  RESOURCE_LIST
+  TESTIMONIALS
+  STATS
+  FAQ
+  PROCESS_STEPS
+  BLOG_FEED
+  LEAD_FORM
+  COMPONENT_LIST
+  CUSTOM
+}
+
+enum NavLocation {
+  HEADER
+  HEADER_SECONDARY
+  FOOTER
+  MOBILE
+}
+
+enum FormFieldType {
+  TEXT
+  EMAIL
+  PHONE
+  TEXTAREA
+  SELECT
+  MULTISELECT
+  CHECKBOX
+  RADIO
+  DATE
+  FILE
+  HIDDEN
+  COUNTRY_PICKER
+  COURSE_PICKER
+  RICH_TEXT
+}
+
+enum ResourceType {
+  PDF
+  VIDEO
+  ARTICLE
+  CHECKLIST
+  TEMPLATE
+  EXTERNAL_LINK
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  IN_PROGRESS
+  WON
+  LOST
+}
+
+// Pipeline stage — finer-grained than LeadStatus. Status is the coarse open/closed
+// signal used by reports; Stage is what counsellors move cards through on the board.
+enum LeadStage {
+  NEW
+  CONTACTED
+  QUALIFIED
+  CONSULTATION_BOOKED
+  CONSULTATION_DONE
+  APPLICATION_STARTED
+  APPLICATION_SUBMITTED
+  OFFER_RECEIVED
+  VISA_APPLIED
+  VISA_GRANTED
+  ENROLLED
+  LOST
+  DROPPED
+}
+
+enum LeadSource {
+  ELIGIBILITY_FORM
+  VISA_RISK_FORM
+  CONSULTATION_FORM
+  RESOURCE_DOWNLOAD
+  CONTACT_FORM
+  NEWSLETTER
+  CHAT_WIDGET
+  PHONE_CALL
+  WALK_IN
+  REFERRAL
+  AGENT
+  EVENT
+  MANUAL_ENTRY
+  IMPORT
+  OTHER
+}
+
+enum LeadTemperature {
+  HOT
+  WARM
+  COLD
+}
+
+enum LeadPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum FollowUpStatus {
+  PENDING
+  COMPLETED
+  MISSED
+  CANCELLED
+}
+
+enum FollowUpChannel {
+  CALL
+  EMAIL
+  WHATSAPP
+  SMS
+  MEETING
+  VIDEO_CALL
+  OTHER
+}
+
+enum LeadActivityType {
+  CREATED
+  STATUS_CHANGED
+  STAGE_CHANGED
+  ASSIGNED
+  UNASSIGNED
+  TAG_ADDED
+  TAG_REMOVED
+  NOTE_ADDED
+  FOLLOWUP_SCHEDULED
+  FOLLOWUP_COMPLETED
+  FOLLOWUP_MISSED
+  EMAIL_SENT
+  EMAIL_RECEIVED
+  WHATSAPP_SENT
+  WHATSAPP_RECEIVED
+  SMS_SENT
+  CALL_LOGGED
+  SCORE_RECOMPUTED
+  CUSTOM
+}
+
+enum MessageChannel {
+  EMAIL
+  WHATSAPP
+  SMS
+}
+
+enum MessageDirection {
+  OUTBOUND
+  INBOUND
+}
+
+enum MessageStatus {
+  QUEUED
+  SENDING
+  SENT
+  DELIVERED
+  READ
+  FAILED
+  BOUNCED
+}
+
+// =============================================================================
+//  Career Engine — enums
+// =============================================================================
+
+enum CourseLevel {
+  CERTIFICATE
+  DIPLOMA
+  ADVANCED_DIPLOMA
+  BACHELORS
+  MASTERS
+  PHD
+}
+
+enum DemandLevel {
+  VERY_LOW
+  LOW
+  MODERATE
+  HIGH
+  VERY_HIGH
+}
+
+enum SalaryPeriod {
+  HOURLY
+  MONTHLY
+  YEARLY
+}
+
+// Career level on the salary ladder — used by SalaryEstimate.
+enum CareerLevel {
+  ENTRY
+  MID
+  SENIOR
+  LEAD
+}
+
+enum PrPathwayType {
+  POST_STUDY_WORK
+  GRADUATE_VISA
+  SKILLED_INDEPENDENT
+  EMPLOYER_SPONSORED
+  REGIONAL
+  EXPRESS_ENTRY
+  INVESTOR
+  FAMILY
+  OTHER
+}
+
+enum PrDifficulty {
+  EASY
+  MODERATE
+  HARD
+  VERY_HARD
+}
+
+enum TrendDirection {
+  GROWING
+  STABLE
+  DECLINING
+}
+
+// =============================================================================
+//  Identity & Audit
+// =============================================================================
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  emailVerified DateTime?
+  name          String
+  passwordHash  String?
+  role          UserRole  @default(EDITOR)
+  avatarUrl     String?
+  image         String?
+  isActive      Boolean   @default(true)
+  lastLoginAt   DateTime?
+
+  // Security: brute-force protection. Reset to 0 on successful login.
+  // `lockedUntil` is checked before bcrypt compare to fail closed.
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime?
+  // Bumped when the password is set. Used to invalidate JWTs minted before
+  // the change (compared against the JWT `iat`).
+  passwordChangedAt   DateTime?
+  // Force re-login after server-side session revocation without touching the
+  // password. Compared against JWT `iat` in the `jwt` callback.
+  sessionsInvalidAt   DateTime?
+
+  // NextAuth relations
+  accounts Account[]
+  sessions Session[]
+  auditLogs AuditLog[] @relation("AuditActor")
+
+  authorProfile Author?
+
+  // Audit relations
+  pagesCreated  Page[]            @relation("PageCreatedBy")
+  pagesUpdated  Page[]            @relation("PageUpdatedBy")
+  postsCreated  BlogPost[]        @relation("PostCreatedBy")
+  postsUpdated  BlogPost[]        @relation("PostUpdatedBy")
+  pageVersions  PageVersion[]
+  postVersions  BlogPostVersion[]
+  assignedLeads LeadSubmission[]  @relation("LeadAssignedTo")
+
+  // Lead CRM audit relations
+  leadNotes              LeadNote[]     @relation("LeadNoteAuthor")
+  leadFollowUpsAssigned  LeadFollowUp[] @relation("LeadFollowUpAssignee")
+  leadFollowUpsCompleted LeadFollowUp[] @relation("LeadFollowUpCompletedBy")
+  leadActivities         LeadActivity[] @relation("LeadActivityActor")
+  leadMessagesSent       LeadMessage[]  @relation("LeadMessageTriggeredBy")
+
+  // Analytics
+  analyticsEvents AnalyticsEvent[] @relation("AnalyticsUser")
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([deletedAt])
+}
+
+// =============================================================================
+//  NextAuth — auth provider tables (Account, Session, VerificationToken)
+//
+//  Required by `@auth/prisma-adapter`. Do not edit field names.
+// =============================================================================
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// =============================================================================
+//  Media library — uploaded files (managed via S3-compatible store)
+// =============================================================================
+
+model Media {
+  id           String  @id @default(cuid())
+  key          String  @unique // S3 object key
+  url          String // public or signed URL base
+  filename     String
+  mimeType     String
+  sizeBytes    Int
+  width        Int?
+  height       Int?
+  alt          String?
+  caption      String?
+  folder       String? @default("uploads")
+  uploadedById String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([folder])
+  @@index([mimeType])
+  @@index([deletedAt])
+}
+
+// =============================================================================
+//  SEO — shared 1:1 with every public entity
+// =============================================================================
+
+model SeoMeta {
+  id              String  @id @default(cuid())
+  canonicalUrl    String?
+  robots          String? @default("index,follow")
+  ogImageUrl      String?
+  twitterCardType String? @default("summary_large_image")
+  structuredData  Json? // JSON-LD blob
+
+  translations SeoMetaTranslation[]
+
+  // Back-references (only one populated per record).
+  page      Page?
+  post      BlogPost?
+  country   Country?
+  category  Category?
+  resource  Resource?
+  pathway   CoursePathway?
+  course    Course?
+  prPathway PrPathway?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model SeoMetaTranslation {
+  id            String  @id @default(cuid())
+  seoId         String
+  seo           SeoMeta @relation(fields: [seoId], references: [id], onDelete: Cascade)
+  locale        Locale
+  title         String
+  description   String?
+  keywords      String?
+  ogTitle       String?
+  ogDescription String?
+
+  @@unique([seoId, locale])
+}
+
+// =============================================================================
+//  Pages
+// =============================================================================
+
+model Page {
+  id          String        @id @default(cuid())
+  slug        String        @unique
+  title       String // canonical-locale title; translations override
+  status      ContentStatus @default(DRAFT)
+  publishedAt DateTime?
+  scheduledAt DateTime?
+  template    String? // "home" | "landing" | "country" | …
+  isHomepage  Boolean       @default(false)
+
+  // Nestable URLs: /services/usa/undergraduate
+  parentId String?
+  parent   Page?   @relation("PageHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children Page[]  @relation("PageHierarchy")
+
+  // SEO — preferred path going forward
+  seoId String?  @unique
+  seo   SeoMeta? @relation(fields: [seoId], references: [id], onDelete: SetNull)
+
+  // Relational sections — populated during the editor migration.
+  // Bootstrap consumers continue to read/write `sections` (Json) below until
+  // Phase 4 of MIGRATION-STRATEGY.md flips the page editor to the relational
+  // model. At Phase 5, `sections` (Json) is dropped and `sectionRows` is
+  // renamed to `sections`.
+  sectionRows Section[]
+
+  // Transitional inline fields kept until the relational editor migration completes.
+  /// @deprecated — moving to SeoMeta. Stop reading after Phase 4.
+  seoTitle       String?
+  /// @deprecated — moving to SeoMeta.
+  seoDescription String?
+  /// @deprecated — moving to SeoMeta.
+  seoKeywords    String?
+  /// @deprecated — moving to SeoMeta.
+  ogImageUrl     String?
+  /// @deprecated — JSON sections. Backfilled then dropped in Phase 5.
+  sections       Json    @default("[]")
+
+  // i18n + versioning
+  translations PageTranslation[]
+  versions     PageVersion[]
+
+  // Inverse relations — nav/footer items that link to this page
+  navItems    NavItem[]
+  footerLinks FooterLink[]
+
+  // Analytics
+  analyticsEvents AnalyticsEvent[]
+
+  // Audit
+  createdById String?
+  createdBy   User?   @relation("PageCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedById String?
+  updatedBy   User?   @relation("PageUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@unique([parentId, slug])
+  @@index([status, publishedAt])
+  @@index([isHomepage])
+  @@index([deletedAt])
+}
+
+model PageTranslation {
+  id     String @id @default(cuid())
+  pageId String
+  page   Page   @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  locale Locale
+
+  title   String
+  slug    String // locale-specific slug
+  excerpt String?
+
+  @@unique([pageId, locale])
+  @@unique([locale, slug])
+  @@index([locale])
+}
+
+model PageVersion {
+  id         String  @id @default(cuid())
+  pageId     String
+  page       Page    @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  version    Int
+  snapshot   Json // full page + sections + translations at this revision
+  changeNote String?
+
+  createdById String?
+  createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+
+  @@unique([pageId, version])
+  @@index([pageId, createdAt])
+}
+
+// =============================================================================
+//  Sections — ordered blocks inside a Page
+//
+//  Discriminated by `type`. Type-specific data lives in:
+//    - 1:1 relations for single-instance blocks (HeroSection, CtaBlock, LeadForm)
+//    - M:N joins for collections (Countries, Testimonials, Resources, Pathways)
+//    - Free-form `settings` JSON for layout/style flags
+//
+// =============================================================================
+
+model Section {
+  id        String      @id @default(cuid())
+  pageId    String
+  page      Page        @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  type      SectionType
+  order     Int
+  isVisible Boolean     @default(true)
+  anchor    String? // for #fragment links
+  settings  Json? // paddingY, background, containerWidth, custom flags
+
+  // 1:1 typed blocks (only the one matching `type` is populated)
+  heroId String?      @unique
+  hero   HeroSection? @relation(fields: [heroId], references: [id], onDelete: SetNull)
+
+  ctaId String?   @unique
+  cta   CtaBlock? @relation(fields: [ctaId], references: [id], onDelete: SetNull)
+
+  formId String?
+  form   LeadForm? @relation(fields: [formId], references: [id], onDelete: SetNull)
+
+  // M:N collections
+  countryCards SectionCountryCard[]
+  testimonials SectionTestimonial[]
+  resources    SectionResource[]
+  pathways     SectionCoursePathway[]
+  components   SectionComponent[]
+
+  translations SectionTranslation[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([pageId, order])
+  @@index([type])
+}
+
+model SectionTranslation {
+  id         String  @id @default(cuid())
+  sectionId  String
+  section    Section @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  locale     Locale
+  eyebrow    String?
+  heading    String?
+  subheading String?
+  body       String?
+
+  @@unique([sectionId, locale])
+}
+
+// =============================================================================
+//  Components — global, reusable block library
+// =============================================================================
+
+model Component {
+  id         String  @id @default(cuid())
+  key        String  @unique // "feature-tile", "stat-counter", …
+  name       String
+  type       String // frontend renderer key
+  props      Json // default props
+  isReusable Boolean @default(true)
+
+  sections     SectionComponent[]
+  translations ComponentTranslation[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+}
+
+model ComponentTranslation {
+  id          String    @id @default(cuid())
+  componentId String
+  component   Component @relation(fields: [componentId], references: [id], onDelete: Cascade)
+  locale      Locale
+  content     Json // localized props
+
+  @@unique([componentId, locale])
+}
+
+model SectionComponent {
+  id          String    @id @default(cuid())
+  sectionId   String
+  section     Section   @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  componentId String
+  component   Component @relation(fields: [componentId], references: [id], onDelete: Cascade)
+  order       Int
+  overrides   Json?
+
+  @@unique([sectionId, componentId, order])
+  @@index([sectionId, order])
+}
+
+// =============================================================================
+//  Hero Sections
+// =============================================================================
+
+model HeroSection {
+  id              String  @id @default(cuid())
+  variant         String? // "split" | "centered" | "video-bg" | "carousel"
+  backgroundImage String?
+  backgroundVideo String?
+  overlayOpacity  Float?  @default(0.4)
+  primaryCtaUrl   String?
+  secondaryCtaUrl String?
+
+  section      Section?
+  translations HeroSectionTranslation[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+}
+
+model HeroSectionTranslation {
+  id                String      @id @default(cuid())
+  heroId            String
+  hero              HeroSection @relation(fields: [heroId], references: [id], onDelete: Cascade)
+  locale            Locale
+  eyebrow           String?
+  headline          String
+  subheadline       String?
+  primaryCtaLabel   String?
+  secondaryCtaLabel String?
+
+  @@unique([heroId, locale])
+}
+
+// =============================================================================
+//  Country Cards (Destinations)
+// =============================================================================
+
+model Country {
+  id              String  @id @default(cuid())
+  code            String  @unique // ISO 3166-1 alpha-2
+  slug            String  @unique
+  flagUrl         String?
+  imageUrl        String?
+  avgTuitionUsd   Int?
+  visaSuccessRate Float?
+  popularity      Int     @default(0)
+  isFeatured      Boolean @default(false)
+
+  status      ContentStatus @default(DRAFT)
+  publishedAt DateTime?
+
+  seoId String?  @unique
+  seo   SeoMeta? @relation(fields: [seoId], references: [id], onDelete: SetNull)
+
+  translations CountryTranslation[]
+  sectionCards SectionCountryCard[]
+  pathways     CoursePathway[]
+  visaRules    VisaRiskRule[]
+  testimonials Testimonial[]
+
+  // Career engine inverse relations
+  courseMappings  CourseCountryMapping[]
+  prPathways      PrPathway[]
+  salaryEstimates SalaryEstimate[]
+  demandSignals   DemandSignal[]
+  careerTrends    CareerTrend[]
+
+  // Analytics
+  analyticsEvents AnalyticsEvent[] @relation("CountryAnalytics")
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([status, publishedAt])
+  @@index([isFeatured, popularity])
+  @@index([deletedAt])
+}
+
+model CountryTranslation {
+  id          String  @id @default(cuid())
+  countryId   String
+  country     Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  locale      Locale
+  name        String
+  shortIntro  String?
+  description String?
+
+  @@unique([countryId, locale])
+}
+
+model SectionCountryCard {
+  id        String  @id @default(cuid())
+  sectionId String
+  section   Section @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  countryId String
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  order     Int
+  overrides Json? // per-instance label/accent overrides
+
+  @@unique([sectionId, countryId])
+  @@index([sectionId, order])
+}
+
+// =============================================================================
+//  Testimonials
+// =============================================================================
+
+model Testimonial {
+  id              String  @id @default(cuid())
+  studentName     String
+  studentPhotoUrl String?
+  universityName  String?
+  programName     String?
+  intakeYear      Int?
+  rating          Int? // 1..5
+  isFeatured      Boolean @default(false)
+
+  countryId String?
+  country   Country? @relation(fields: [countryId], references: [id], onDelete: SetNull)
+
+  status      ContentStatus @default(DRAFT)
+  publishedAt DateTime?
+
+  translations TestimonialTranslation[]
+  sectionLinks SectionTestimonial[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([status, publishedAt])
+  @@index([isFeatured])
+  @@index([deletedAt])
+}
+
+model TestimonialTranslation {
+  id            String      @id @default(cuid())
+  testimonialId String
+  testimonial   Testimonial @relation(fields: [testimonialId], references: [id], onDelete: Cascade)
+  locale        Locale
+  quote         String
+  studentTitle  String? // "MSc CS, MIT '25"
+
+  @@unique([testimonialId, locale])
+}
+
+model SectionTestimonial {
+  id            String      @id @default(cuid())
+  sectionId     String
+  section       Section     @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  testimonialId String
+  testimonial   Testimonial @relation(fields: [testimonialId], references: [id], onDelete: Cascade)
+  order         Int
+
+  @@unique([sectionId, testimonialId])
+  @@index([sectionId, order])
+}
+
+// =============================================================================
+//  CTA Blocks
+// =============================================================================
+
+model CtaBlock {
+  id              String  @id @default(cuid())
+  variant         String? // "banner" | "inline" | "card" | "split"
+  backgroundImage String?
+  backgroundColor String?
+  primaryCtaUrl   String?
+  secondaryCtaUrl String?
+
+  section      Section?
+  translations CtaBlockTranslation[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+}
+
+model CtaBlockTranslation {
+  id                String   @id @default(cuid())
+  ctaId             String
+  cta               CtaBlock @relation(fields: [ctaId], references: [id], onDelete: Cascade)
+  locale            Locale
+  heading           String
+  body              String?
+  primaryCtaLabel   String?
+  secondaryCtaLabel String?
+
+  @@unique([ctaId, locale])
+}
+
+// =============================================================================
+//  Blog
+// =============================================================================
+
+// Source format for the canonical body. Translations carry their own copy
+// of the body — keep `bodyFormat` here as the editor hint that drives the
+// renderer pick at request time.
+enum BlogBodyFormat {
+  HTML
+  MDX
+  LEXICAL_JSON
+}
+
+model BlogPost {
+  id             String         @id @default(cuid())
+  slug           String         @unique
+  title          String // canonical title; translations override
+  excerpt        String? // canonical excerpt; translations override
+  body           String         @default("") // canonical-locale body; translations override
+  bodyFormat     BlogBodyFormat @default(HTML)
+  coverImageUrl  String?
+  coverImageAlt  String?
+  readingMinutes Int?
+  wordCount      Int?
+  isFeatured     Boolean        @default(false)
+  /// Cached table-of-contents derived from body headings ([{id,text,level}]).
+  /// Re-computed on every save; safe to read on the public path.
+  toc            Json?
+
+  status      ContentStatus @default(DRAFT)
+  publishedAt DateTime?
+  scheduledAt DateTime?
+
+  authorId String?
+  author   Author? @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  categories BlogPostCategory[]
+  tags       BlogPostTag[]
+
+  seoId String?  @unique
+  seo   SeoMeta? @relation(fields: [seoId], references: [id], onDelete: SetNull)
+
+  faqs          BlogPostFaq[]
+  ctaSlots      BlogPostCta[]
+  internalLinks BlogPostInternalLink[]
+  // Manual related-post pins. When empty, related posts are computed at
+  // read time from shared categories/tags (see blog.service.ts).
+  relatedFrom   BlogPostRelated[]      @relation("RelatedSource")
+  relatedTo     BlogPostRelated[]      @relation("RelatedTarget")
+
+  translations BlogPostTranslation[]
+  versions     BlogPostVersion[]
+
+  // Analytics
+  analyticsEvents AnalyticsEvent[] @relation("BlogPostAnalytics")
+
+  createdById String?
+  createdBy   User?   @relation("PostCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedById String?
+  updatedBy   User?   @relation("PostUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([status, publishedAt])
+  @@index([authorId])
+  @@index([isFeatured])
+  @@index([deletedAt])
+}
+
+// FAQ entries scoped to one post. Rendered after the body and emitted as
+// FAQPage JSON-LD so Google can surface rich results for the post.
+model BlogPostFaq {
+  id       String   @id @default(cuid())
+  postId   String
+  post     BlogPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  question String
+  answer   String // markdown / plain text — renderer escapes
+  order    Int      @default(0)
+
+  translations BlogPostFaqTranslation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([postId, order])
+}
+
+model BlogPostFaqTranslation {
+  id       String      @id @default(cuid())
+  faqId    String
+  faq      BlogPostFaq @relation(fields: [faqId], references: [id], onDelete: Cascade)
+  locale   Locale
+  question String
+  answer   String
+
+  @@unique([faqId, locale])
+}
+
+// CTA slots — admin-controlled call-to-action blocks injected into the post
+// body at a chosen anchor or after a heading. Position rules let one piece
+// of body content host different CTAs per post without editing the body.
+enum BlogCtaPlacement {
+  AFTER_INTRO // after the first paragraph
+  AFTER_HEADING // after the heading whose id matches anchor
+  END_OF_POST // appended after the body and before related posts
+  SIDEBAR // floats in the sidebar on wide layouts
+  AFTER_PARAGRAPH // after the Nth paragraph (see paragraphIndex)
+}
+
+enum BlogCtaVariant {
+  INLINE
+  CARD
+  BANNER
+  LEAD_FORM
+}
+
+model BlogPostCta {
+  id              String           @id @default(cuid())
+  postId          String
+  post            BlogPost         @relation(fields: [postId], references: [id], onDelete: Cascade)
+  placement       BlogCtaPlacement
+  variant         BlogCtaVariant   @default(CARD)
+  anchor          String? // heading id when placement = AFTER_HEADING
+  paragraphIndex  Int? // 0-based when placement = AFTER_PARAGRAPH
+  heading         String
+  body            String?
+  primaryLabel    String?
+  primaryUrl      String?
+  secondaryLabel  String?
+  secondaryUrl    String?
+  formKey         String? // when variant = LEAD_FORM, references LeadForm.key
+  backgroundImage String?
+  isVisible       Boolean          @default(true)
+  order           Int              @default(0)
+
+  translations BlogPostCtaTranslation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([postId, order])
+}
+
+model BlogPostCtaTranslation {
+  id             String      @id @default(cuid())
+  ctaId          String
+  cta            BlogPostCta @relation(fields: [ctaId], references: [id], onDelete: Cascade)
+  locale         Locale
+  heading        String
+  body           String?
+  primaryLabel   String?
+  secondaryLabel String?
+
+  @@unique([ctaId, locale])
+}
+
+// Internal-link rules scoped to a single post. Override the global rules in
+// `lib/seo/internal-links` so admins can densify cross-linking per article.
+model BlogPostInternalLink {
+  id        String   @id @default(cuid())
+  postId    String
+  post      BlogPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  keyword   String
+  url       String
+  titleAttr String?
+  isActive  Boolean  @default(true)
+  order     Int      @default(0)
+
+  @@unique([postId, keyword])
+  @@index([postId, order])
+}
+
+// Manual related-post pins. When at least one row exists for `sourcePostId`,
+// it overrides the auto-derived list. Order controls render order.
+model BlogPostRelated {
+  id           String   @id @default(cuid())
+  sourcePostId String
+  source       BlogPost @relation("RelatedSource", fields: [sourcePostId], references: [id], onDelete: Cascade)
+  targetPostId String
+  target       BlogPost @relation("RelatedTarget", fields: [targetPostId], references: [id], onDelete: Cascade)
+  order        Int      @default(0)
+
+  @@unique([sourcePostId, targetPostId])
+  @@index([sourcePostId, order])
+}
+
+model BlogPostTranslation {
+  id         String         @id @default(cuid())
+  postId     String
+  post       BlogPost       @relation(fields: [postId], references: [id], onDelete: Cascade)
+  locale     Locale
+  title      String
+  slug       String // locale-specific slug
+  excerpt    String?
+  body       String // rich-text source (HTML / MDX / Lexical JSON serialized)
+  bodyFormat BlogBodyFormat @default(HTML)
+  toc        Json?
+
+  @@unique([postId, locale])
+  @@unique([locale, slug])
+  @@index([locale])
+}
+
+model BlogPostVersion {
+  id         String   @id @default(cuid())
+  postId     String
+  post       BlogPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  version    Int
+  snapshot   Json
+  changeNote String?
+
+  createdById String?
+  createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+
+  @@unique([postId, version])
+  @@index([postId, createdAt])
+}
+
+// =============================================================================
+//  Categories & Tags
+// =============================================================================
+
+model Category {
+  id      String  @id @default(cuid())
+  slug    String  @unique
+  iconUrl String?
+  order   Int     @default(0)
+
+  parentId String?
+  parent   Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children Category[] @relation("CategoryHierarchy")
+
+  posts        BlogPostCategory[]
+  translations CategoryTranslation[]
+
+  seoId String?  @unique
+  seo   SeoMeta? @relation(fields: [seoId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([deletedAt])
+}
+
+model CategoryTranslation {
+  id          String   @id @default(cuid())
+  categoryId  String
+  category    Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  locale      Locale
+  name        String
+  description String?
+
+  @@unique([categoryId, locale])
+}
+
+model BlogPostCategory {
+  postId     String
+  post       BlogPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  categoryId String
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@id([postId, categoryId])
+  @@index([categoryId])
+}
+
+model Tag {
+  id   String @id @default(cuid())
+  slug String @unique
+  name String
+
+  posts BlogPostTag[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+}
+
+model BlogPostTag {
+  postId String
+  post   BlogPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  tagId  String
+  tag    Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([postId, tagId])
+  @@index([tagId])
+}
+
+// =============================================================================
+//  Authors
+// =============================================================================
+
+model Author {
+  id        String  @id @default(cuid())
+  slug      String  @unique
+  userId    String? @unique
+  user      User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  avatarUrl String?
+  email     String?
+  twitter   String?
+  linkedin  String?
+
+  posts        BlogPost[]
+  resources    Resource[]
+  translations AuthorTranslation[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+}
+
+model AuthorTranslation {
+  id       String  @id @default(cuid())
+  authorId String
+  author   Author  @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  locale   Locale
+  name     String
+  title    String? // "Senior Counselor"
+  bio      String?
+
+  @@unique([authorId, locale])
+}
+
+// =============================================================================
+//  Navigation
+//   (NavMenu / NavItem keep the bootstrap shape, plus item translations.)
+// =============================================================================
+
+model NavMenu {
+  id       String      @id @default(cuid())
+  key      String      @unique
+  location NavLocation
+  isActive Boolean     @default(true)
+
+  items NavItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model NavItem {
+  id     String  @id @default(cuid())
+  menuId String
+  menu   NavMenu @relation(fields: [menuId], references: [id], onDelete: Cascade)
+
+  parentId String?
+  parent   NavItem?  @relation("NavHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children NavItem[] @relation("NavHierarchy")
+
+  label     String // canonical label; translations override
+  url       String
+  iconKey   String?
+  order     Int
+  openInNew Boolean @default(false)
+  isVisible Boolean @default(true)
+
+  // Optional linkage to a Page so renames update automatically.
+  pageId String?
+  page   Page?   @relation(fields: [pageId], references: [id], onDelete: SetNull)
+
+  translations NavItemTranslation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([menuId, parentId, order])
+  @@index([pageId])
+}
+
+model NavItemTranslation {
+  id        String  @id @default(cuid())
+  navItemId String
+  navItem   NavItem @relation(fields: [navItemId], references: [id], onDelete: Cascade)
+  locale    Locale
+  label     String
+  badge     String?
+
+  @@unique([navItemId, locale])
+}
+
+// =============================================================================
+//  Footer
+// =============================================================================
+
+model FooterColumn {
+  id       String  @id @default(cuid())
+  key      String  @unique
+  heading  String // canonical heading; translations override
+  order    Int
+  isActive Boolean @default(true)
+
+  links        FooterLink[]
+  translations FooterColumnTranslation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model FooterColumnTranslation {
+  id       String       @id @default(cuid())
+  columnId String
+  column   FooterColumn @relation(fields: [columnId], references: [id], onDelete: Cascade)
+  locale   Locale
+  heading  String
+
+  @@unique([columnId, locale])
+}
+
+model FooterLink {
+  id       String       @id @default(cuid())
+  columnId String
+  column   FooterColumn @relation(fields: [columnId], references: [id], onDelete: Cascade)
+
+  label     String // canonical label; translations override
+  url       String
+  order     Int
+  openInNew Boolean @default(false)
+  isVisible Boolean @default(true)
+
+  pageId String?
+  page   Page?   @relation(fields: [pageId], references: [id], onDelete: SetNull)
+
+  translations FooterLinkTranslation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([columnId, order])
+}
+
+model FooterLinkTranslation {
+  id     String     @id @default(cuid())
+  linkId String
+  link   FooterLink @relation(fields: [linkId], references: [id], onDelete: Cascade)
+  locale Locale
+  label  String
+
+  @@unique([linkId, locale])
+}
+
+// =============================================================================
+//  Resources — downloadable guides, PDFs, videos
+// =============================================================================
+
+model Resource {
+  id           String       @id @default(cuid())
+  slug         String       @unique
+  type         ResourceType
+  fileUrl      String?
+  externalUrl  String?
+  thumbnailUrl String?
+  fileSize     Int? // bytes
+  pageCount    Int?
+  gated        Boolean      @default(false) // requires lead-form submission
+
+  authorId String?
+  author   Author? @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  status      ContentStatus @default(DRAFT)
+  publishedAt DateTime?
+
+  seoId String?  @unique
+  seo   SeoMeta? @relation(fields: [seoId], references: [id], onDelete: SetNull)
+
+  translations    ResourceTranslation[]
+  sectionLinks    SectionResource[]
+  // Reverse relation for resource-download leads — populated when a gated
+  // resource triggers a lead submission.
+  leadSubmissions LeadSubmission[]
+
+  // Analytics
+  analyticsEvents AnalyticsEvent[] @relation("ResourceAnalytics")
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([type])
+  @@index([status, publishedAt])
+  @@index([deletedAt])
+}
+
+model ResourceTranslation {
+  id          String   @id @default(cuid())
+  resourceId  String
+  resource    Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  locale      Locale
+  title       String
+  description String?
+
+  @@unique([resourceId, locale])
+}
+
+model SectionResource {
+  id         String   @id @default(cuid())
+  sectionId  String
+  section    Section  @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  resourceId String
+  resource   Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  order      Int
+
+  @@unique([sectionId, resourceId])
+  @@index([sectionId, order])
+}
+
+// =============================================================================
+//  Course Pathways (Destination × Level × Field)
+// =============================================================================
+
+model CoursePathway {
+  id             String  @id @default(cuid())
+  slug           String  @unique
+  level          String // "UG" | "PG" | "PhD" | "Diploma"
+  field          String // "Computer Science", "Business", …
+  durationMonths Int?
+  avgTuitionUsd  Int?
+  intakeMonths   String? // CSV of months; admin-editable
+
+  countryId String?
+  country   Country? @relation(fields: [countryId], references: [id], onDelete: SetNull)
+
+  status      ContentStatus @default(DRAFT)
+  publishedAt DateTime?
+
+  seoId String?  @unique
+  seo   SeoMeta? @relation(fields: [seoId], references: [id], onDelete: SetNull)
+
+  translations CoursePathwayTranslation[]
+  sectionLinks SectionCoursePathway[]
+  requirements PathwayRequirement[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([countryId, level, field])
+  @@index([status, publishedAt])
+  @@index([deletedAt])
+}
+
+model CoursePathwayTranslation {
+  id          String        @id @default(cuid())
+  pathwayId   String
+  pathway     CoursePathway @relation(fields: [pathwayId], references: [id], onDelete: Cascade)
+  locale      Locale
+  title       String
+  summary     String?
+  description String?
+
+  @@unique([pathwayId, locale])
+}
+
+model PathwayRequirement {
+  id        String        @id @default(cuid())
+  pathwayId String
+  pathway   CoursePathway @relation(fields: [pathwayId], references: [id], onDelete: Cascade)
+  key       String // "ielts_min", "gpa_min", "work_exp_years"
+  valueNum  Float?
+  valueText String?
+  order     Int           @default(0)
+
+  translations PathwayRequirementTranslation[]
+
+  @@index([pathwayId, order])
+}
+
+model PathwayRequirementTranslation {
+  id            String             @id @default(cuid())
+  requirementId String
+  requirement   PathwayRequirement @relation(fields: [requirementId], references: [id], onDelete: Cascade)
+  locale        Locale
+  label         String
+  helpText      String?
+
+  @@unique([requirementId, locale])
+}
+
+model SectionCoursePathway {
+  id        String        @id @default(cuid())
+  sectionId String
+  section   Section       @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  pathwayId String
+  pathway   CoursePathway @relation(fields: [pathwayId], references: [id], onDelete: Cascade)
+  order     Int
+
+  @@unique([sectionId, pathwayId])
+  @@index([sectionId, order])
+}
+
+// =============================================================================
+//  Visa Risk Rules — admin-managed scoring engine
+//
+//  Rules are evaluated against an applicant profile at submission time. Each
+//  rule has a `condition` JSON describing the predicate; the backend's rule
+//  engine interprets it. Rule changes go live without code deploy.
+// =============================================================================
+
+model VisaRiskRule {
+  id        String    @id @default(cuid())
+  key       String    @unique // "low-funds", "weak-academic", "long-gap"
+  countryId String?
+  country   Country?  @relation(fields: [countryId], references: [id], onDelete: SetNull)
+  riskLevel RiskLevel
+  score     Int // weighted contribution to overall score
+  condition Json // serialized predicate { field, op, value, …}
+  isActive  Boolean   @default(true)
+  priority  Int       @default(0) // higher runs first
+
+  translations VisaRiskRuleTranslation[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([countryId, isActive, priority])
+  @@index([deletedAt])
+}
+
+model VisaRiskRuleTranslation {
+  id       String       @id @default(cuid())
+  ruleId   String
+  rule     VisaRiskRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  locale   Locale
+  label    String
+  message  String // shown to applicant when rule fires
+  guidance String? // remediation steps
+
+  @@unique([ruleId, locale])
+}
+
+// =============================================================================
+//  Lead Forms & Dynamic Fields
+// =============================================================================
+
+model LeadForm {
+  id         String  @id @default(cuid())
+  key        String  @unique // "homepage-hero", "free-counseling"
+  successUrl String?
+  webhookUrl String? // POST submissions to external CRM
+  emailTo    String? // notification recipient
+  isActive   Boolean @default(true)
+
+  fields       LeadFormField[]
+  sections     Section[]
+  translations LeadFormTranslation[]
+  submissions  LeadSubmission[]
+
+  // Analytics
+  analyticsEvents AnalyticsEvent[] @relation("FormAnalytics")
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+}
+
+model LeadFormTranslation {
+  id             String   @id @default(cuid())
+  formId         String
+  form           LeadForm @relation(fields: [formId], references: [id], onDelete: Cascade)
+  locale         Locale
+  heading        String?
+  subheading     String?
+  submitLabel    String   @default("Submit")
+  successMessage String?
+
+  @@unique([formId, locale])
+}
+
+model LeadFormField {
+  id          String        @id @default(cuid())
+  formId      String
+  form        LeadForm      @relation(fields: [formId], references: [id], onDelete: Cascade)
+  name        String // machine name, stable across renames
+  type        FormFieldType
+  order       Int
+  isRequired  Boolean       @default(false)
+  isVisible   Boolean       @default(true)
+  validation  Json? // { pattern, min, max, customRule }
+  options     Json? // SELECT/RADIO/MULTISELECT — [{ value, labelKey }]
+  conditional Json? // show/hide rules referencing other field values
+
+  translations LeadFormFieldTranslation[]
+
+  @@unique([formId, name])
+  @@index([formId, order])
+}
+
+model LeadFormFieldTranslation {
+  id           String        @id @default(cuid())
+  fieldId      String
+  field        LeadFormField @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+  locale       Locale
+  label        String
+  placeholder  String?
+  helpText     String?
+  optionLabels Json? // { value -> label } overrides for SELECT/RADIO
+
+  @@unique([fieldId, locale])
+}
+
+// =============================================================================
+//  Leads — the CRM record. One row per inquiry/applicant.
+//
+//  Sources:
+//    - Eligibility form           → ELIGIBILITY_FORM
+//    - Visa-risk assessment       → VISA_RISK_FORM
+//    - Consultation booking       → CONSULTATION_FORM
+//    - Resource (gated) download  → RESOURCE_DOWNLOAD
+//
+//  Pipeline:
+//    `status` is the coarse open/closed dimension reports group by.
+//    `stage`  is the granular kanban column the counsellor moves the card
+//             through. Both are kept in sync by the service layer.
+//
+//  Denormalized contact fields (`email`, `phone`, …) are mirrored out of `data`
+//  on every write so list views can filter without parsing JSON.
+// =============================================================================
+
+model LeadSubmission {
+  id String @id @default(cuid())
+
+  // Source — every lead carries a source. Forms attach via `formId`; manual
+  // entries and imports skip the form linkage.
+  source LeadSource @default(OTHER)
+  formId String?
+  form   LeadForm?  @relation(fields: [formId], references: [id], onDelete: SetNull)
+
+  // Raw submission payload — `{ fieldName: value }` shape from the renderer.
+  data Json
+
+  // Denormalized contact + classification (filterable on the list page).
+  firstName       String?
+  lastName        String?
+  fullName        String?
+  email           String?
+  phone           String?
+  whatsapp        String?
+  // ISO 3166-1 alpha-2 of the *destination country* the lead is asking about.
+  // Not the lead's nationality. Keep both? Add `nationalityCode` later if
+  // marketing asks for it; for now the destination is what drives routing.
+  countryCode     String?
+  preferredIntake String? // "Fall 2026", "Spring 2026", …
+  budgetUsd       Int?
+  ielts           Float?
+  gpa             Float?
+
+  // Tracking
+  sourceUrl   String?
+  referrerUrl String?
+  utmSource   String?
+  utmMedium   String?
+  utmCampaign String?
+  utmTerm     String?
+  utmContent  String?
+  ipAddress   String?
+  userAgent   String?
+  locale      Locale?
+
+  // Pipeline + scoring
+  status         LeadStatus      @default(NEW)
+  stage          LeadStage       @default(NEW)
+  temperature    LeadTemperature @default(WARM)
+  priority       LeadPriority    @default(NORMAL)
+  // 0..100 — computed by the scoring engine. `scoreBreakdown` keeps the
+  // per-rule contribution so admins can audit "why is this lead HOT?".
+  score          Int             @default(0)
+  scoreBreakdown Json?
+
+  // Risk integration — when a lead came through the visa-risk form, the
+  // engine's verdict is pinned here so counsellors see it at a glance.
+  visaRiskLevel RiskLevel?
+  visaRiskScore Int?
+
+  // Assignment
+  assignedToId String?
+  assignedTo   User?     @relation("LeadAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+  assignedAt   DateTime?
+
+  // Follow-up tracking — denormalized for cheap list-sort.
+  lastContactedAt DateTime?
+  nextFollowUpAt  DateTime?
+  contactAttempts Int       @default(0)
+
+  // Close
+  closedAt    DateTime?
+  closeReason String? // "won_enrolled", "lost_budget", "lost_competitor", "duplicate", …
+
+  // Resource-download leads link the resource that triggered the gate.
+  resourceId String?
+  resource   Resource? @relation(fields: [resourceId], references: [id], onDelete: SetNull)
+
+  // Children
+  notes                 LeadNote[]
+  followUps             LeadFollowUp[]
+  activities            LeadActivity[]
+  tags                  LeadTagOnLead[]
+  messages              LeadMessage[]
+  careerRecommendations CareerRecommendation[]
+
+  // Analytics
+  analyticsEvents   AnalyticsEvent[]   @relation("LeadAnalytics")
+  analyticsSessions AnalyticsSession[] @relation("LeadSessions")
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([formId, createdAt])
+  @@index([source, createdAt])
+  @@index([status])
+  @@index([stage])
+  @@index([temperature])
+  @@index([priority])
+  @@index([assignedToId])
+  @@index([email])
+  @@index([phone])
+  @@index([countryCode])
+  @@index([nextFollowUpAt])
+  @@index([lastContactedAt])
+  @@index([score])
+  @@index([deletedAt])
+  @@index([createdAt])
+}
+
+// -----------------------------------------------------------------------------
+//  Lead notes — admin-only, freeform. Pinned notes float to the top of the
+//  detail timeline.
+// -----------------------------------------------------------------------------
+
+model LeadNote {
+  id     String         @id @default(cuid())
+  leadId String
+  lead   LeadSubmission @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  body     String
+  isPinned Boolean @default(false)
+
+  authorId String?
+  author   User?   @relation("LeadNoteAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([leadId, createdAt])
+  @@index([deletedAt])
+}
+
+// -----------------------------------------------------------------------------
+//  Follow-ups — scheduled outreach. `dueAt` drives the reminder queue; a daily
+//  cron flips overdue PENDING rows to MISSED and emits an activity row.
+// -----------------------------------------------------------------------------
+
+model LeadFollowUp {
+  id     String         @id @default(cuid())
+  leadId String
+  lead   LeadSubmission @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  channel FollowUpChannel
+  status  FollowUpStatus  @default(PENDING)
+  dueAt   DateTime
+  notes   String?
+  outcome String? // free-form: "left voicemail", "rescheduled to Tue", …
+
+  assignedToId String?
+  assignedTo   User?   @relation("LeadFollowUpAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+
+  completedAt   DateTime?
+  completedById String?
+  completedBy   User?     @relation("LeadFollowUpCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([leadId, dueAt])
+  @@index([status, dueAt])
+  @@index([assignedToId, dueAt])
+}
+
+// -----------------------------------------------------------------------------
+//  Lead activity log — append-only audit trail rendered as the detail timeline.
+// -----------------------------------------------------------------------------
+
+model LeadActivity {
+  id     String         @id @default(cuid())
+  leadId String
+  lead   LeadSubmission @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  type    LeadActivityType
+  // Arbitrary payload — `{ from, to }` for state changes, `{ subject }` for
+  // emails, etc. The renderer picks the right summary per `type`.
+  payload Json?
+  // Optional short label for the timeline ("Stage: NEW → CONTACTED").
+  summary String?
+
+  actorId String?
+  actor   User?   @relation("LeadActivityActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([leadId, createdAt])
+  @@index([type])
+}
+
+// -----------------------------------------------------------------------------
+//  Tags — global, admin-managed labels. Many-to-many to leads via the join.
+// -----------------------------------------------------------------------------
+
+model LeadTag {
+  id    String  @id @default(cuid())
+  slug  String  @unique
+  label String
+  color String? // hex, optional
+
+  leads LeadTagOnLead[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+}
+
+model LeadTagOnLead {
+  leadId String
+  lead   LeadSubmission @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  tagId  String
+  tag    LeadTag        @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@id([leadId, tagId])
+  @@index([tagId])
+}
+
+// -----------------------------------------------------------------------------
+//  Messages — every email/whatsapp/sms sent to or received from a lead.
+//  Stored centrally so the timeline shows the full conversation regardless of
+//  channel, and so re-tries can replay from the queue without losing audit.
+// -----------------------------------------------------------------------------
+
+model LeadMessage {
+  id     String         @id @default(cuid())
+  leadId String
+  lead   LeadSubmission @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  channel   MessageChannel
+  direction MessageDirection
+  status    MessageStatus    @default(QUEUED)
+
+  // Recipient / sender — populated based on direction + channel.
+  toAddress   String?
+  fromAddress String?
+
+  subject String? // email only
+  body    String // text/html body or whatsapp text
+
+  // Template metadata — WhatsApp template messages require a name + locale +
+  // bound parameters. Set for templated sends; null for free-form.
+  templateKey    String?
+  templateParams Json?
+
+  // External provider IDs let webhooks reconcile status updates.
+  providerMessageId String?
+  errorCode         String?
+  errorMessage      String?
+
+  sentAt      DateTime?
+  deliveredAt DateTime?
+  readAt      DateTime?
+
+  triggeredById String?
+  triggeredBy   User?   @relation("LeadMessageTriggeredBy", fields: [triggeredById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([leadId, createdAt])
+  @@index([channel, status])
+  @@index([providerMessageId])
+}
+
+// =============================================================================
+//  Site Settings — key/value config with optional localized overrides
+// =============================================================================
+
+model SiteSetting {
+  id       String  @id @default(cuid())
+  key      String  @unique // "site.name", "contact.email", "integrations.gtm.id"
+  group    String // "branding" | "contact" | "social" | "integrations" | "legal"
+  type     String // "string" | "text" | "number" | "boolean" | "json" | "image" | "color" | "url"
+  value    Json
+  isPublic Boolean @default(true)
+
+  translations SiteSettingTranslation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([group])
+}
+
+model SiteSettingTranslation {
+  id        String      @id @default(cuid())
+  settingId String
+  setting   SiteSetting @relation(fields: [settingId], references: [id], onDelete: Cascade)
+  locale    Locale
+  value     Json
+
+  @@unique([settingId, locale])
+}
+
+// =============================================================================
+//  Site Theme — admin-selectable palette (already in production)
+// =============================================================================
+
+model SiteTheme {
+  id          String  @id @default(cuid())
+  key         String  @unique
+  name        String
+  isActive    Boolean @default(false)
+  isDefault   Boolean @default(false)
+  isDarkMode  Boolean @default(false)
+  tokens      Json
+  radius      Float   @default(0.5)
+  fontHeading String?
+  fontBody    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive])
+}
+
+// =============================================================================
+//  Career Engine
+//
+//  Models a course → destination → career → PR pipeline so the recommendation
+//  engine can score any (course × country) pair against an applicant profile.
+//
+//  Design pillars (mirror visa-risk):
+//   - All data admin-editable (no hardcoded course or salary tables).
+//   - Per-country economics live on `CourseCountryMapping` so the same
+//     `Course` row reuses across destinations without duplication.
+//   - Demand + salary + PR data are versioned by `effectiveYear` so admins can
+//     publish updates without overwriting history.
+//   - Translations on user-facing strings; numeric/category data lives on the
+//     canonical row.
+// =============================================================================
+
+model Course {
+  id             String      @id @default(cuid())
+  slug           String      @unique
+  code           String?     @unique // ISCED/internal taxonomy code
+  level          CourseLevel
+  field          String // canonical field tag, e.g. "Computer Science"
+  discipline     String? // grouping: "STEM" | "Business" | "Health" | …
+  durationMonths Int?
+  isFeatured     Boolean     @default(false)
+  popularity     Int         @default(0)
+  imageUrl       String?
+
+  status      ContentStatus @default(DRAFT)
+  publishedAt DateTime?
+
+  seoId String?  @unique
+  seo   SeoMeta? @relation(fields: [seoId], references: [id], onDelete: SetNull)
+
+  translations    CourseTranslation[]
+  countryMappings CourseCountryMapping[]
+  outcomes        CourseCareerOutcome[]
+  salaryEstimates SalaryEstimate[]
+  demandSignals   DemandSignal[]
+  careerTrends    CareerTrend[]
+
+  // Analytics
+  analyticsEvents AnalyticsEvent[] @relation("CourseAnalytics")
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([status, publishedAt])
+  @@index([isFeatured, popularity])
+  @@index([field])
+  @@index([discipline])
+  @@index([deletedAt])
+}
+
+model CourseTranslation {
+  id          String  @id @default(cuid())
+  courseId    String
+  course      Course  @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  locale      Locale
+  name        String
+  shortIntro  String?
+  description String?
+
+  @@unique([courseId, locale])
+}
+
+// Per-destination economics + universities + intakes for a course.
+model CourseCountryMapping {
+  id                 String  @id @default(cuid())
+  courseId           String
+  course             Course  @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  countryId          String
+  country            Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  avgTuitionUsd      Int?
+  livingCostUsd      Int? // annual
+  intakeMonths       String? // CSV e.g. "Feb,Jul"
+  topUniversities    Json? // [{ name, rank, city, url }]
+  prEligible         Boolean @default(false)
+  graduateVisaMonths Int? // post-study work months
+  notes              String?
+  isFeatured         Boolean @default(false)
+
+  prPathwayLinks PrPathwayOnCourseMapping[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([courseId, countryId])
+  @@index([countryId])
+  @@index([prEligible])
+}
+
+// PR/immigration pathway — country-scoped. `type` keys broad strategy
+// families; `difficulty` lets admins flag how hard the pathway is.
+model PrPathway {
+  id             String        @id @default(cuid())
+  slug           String        @unique
+  countryId      String
+  country        Country       @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  type           PrPathwayType
+  difficulty     PrDifficulty  @default(MODERATE)
+  minYearsToPr   Int? // typical years from study completion to PR
+  pointsRequired Int? // 0 if not points-tested
+  ageLimit       Int?
+  englishMinBand Float? // IELTS-equivalent minimum
+  isActive       Boolean       @default(true)
+  priority       Int           @default(0)
+  externalUrl    String?
+
+  seoId String?  @unique
+  seo   SeoMeta? @relation(fields: [seoId], references: [id], onDelete: SetNull)
+
+  translations PrPathwayTranslation[]
+  steps        PrPathwayStep[]
+  courseLinks  PrPathwayOnCourseMapping[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([countryId, isActive, priority])
+  @@index([type])
+  @@index([deletedAt])
+}
+
+model PrPathwayTranslation {
+  id        String    @id @default(cuid())
+  pathwayId String
+  pathway   PrPathway @relation(fields: [pathwayId], references: [id], onDelete: Cascade)
+  locale    Locale
+  name      String
+  summary   String?
+  body      String? // longer description
+
+  @@unique([pathwayId, locale])
+}
+
+// Ordered procedural steps (e.g. "Complete 2y study" → "Apply 485" → "Skills assessment" → …)
+model PrPathwayStep {
+  id             String    @id @default(cuid())
+  pathwayId      String
+  pathway        PrPathway @relation(fields: [pathwayId], references: [id], onDelete: Cascade)
+  order          Int
+  durationMonths Int?
+
+  translations PrPathwayStepTranslation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([pathwayId, order])
+}
+
+model PrPathwayStepTranslation {
+  id     String        @id @default(cuid())
+  stepId String
+  step   PrPathwayStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
+  locale Locale
+  title  String
+  detail String?
+
+  @@unique([stepId, locale])
+}
+
+// Join: which PR pathways the course unlocks in this country.
+model PrPathwayOnCourseMapping {
+  mappingId String
+  mapping   CourseCountryMapping @relation(fields: [mappingId], references: [id], onDelete: Cascade)
+  pathwayId String
+  pathway   PrPathway            @relation(fields: [pathwayId], references: [id], onDelete: Cascade)
+  priority  Int                  @default(0) // higher = more recommended
+
+  createdAt DateTime @default(now())
+
+  @@id([mappingId, pathwayId])
+  @@index([pathwayId])
+}
+
+// Career outcomes (occupations) a course commonly leads to.
+model CourseCareerOutcome {
+  id         String  @id @default(cuid())
+  courseId   String
+  course     Course  @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  occupation String // canonical title, e.g. "Software Engineer"
+  anzscoCode String? // skills-shortage / national occupation code
+  fitScore   Int     @default(70) // 0..100 — how strongly the course leads here
+  order      Int     @default(0)
+
+  translations CourseCareerOutcomeTranslation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([courseId, order])
+  @@index([occupation])
+}
+
+model CourseCareerOutcomeTranslation {
+  id        String              @id @default(cuid())
+  outcomeId String
+  outcome   CourseCareerOutcome @relation(fields: [outcomeId], references: [id], onDelete: Cascade)
+  locale    Locale
+  title     String
+  blurb     String?
+
+  @@unique([outcomeId, locale])
+}
+
+// Salary band per (course or occupation) × country × career level. Versioned
+// by `effectiveYear` so admins can publish next year's numbers without
+// destroying history.
+model SalaryEstimate {
+  id            String       @id @default(cuid())
+  courseId      String?
+  course        Course?      @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  countryId     String
+  country       Country      @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  occupation    String? // null = course average across outcomes
+  level         CareerLevel
+  period        SalaryPeriod @default(YEARLY)
+  currency      String       @default("USD")
+  minAmount     Int
+  midAmount     Int
+  maxAmount     Int
+  effectiveYear Int
+  source        String? // "BLS", "ABS", "internal", …
+  notes         String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([courseId, countryId, occupation, level, effectiveYear])
+  @@index([countryId, level])
+  @@index([occupation])
+  @@index([effectiveYear])
+}
+
+// Demand signal — how hot is this course/occupation in this country right now.
+// Drives the recommendation ranking's demand component.
+model DemandSignal {
+  id             String      @id @default(cuid())
+  courseId       String?
+  course         Course?     @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  countryId      String
+  country        Country     @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  occupation     String?
+  demandLevel    DemandLevel
+  shortageListed Boolean     @default(false) // on country's skills-shortage list
+  vacancies12mo  Int?
+  growthPercent  Float?
+  effectiveYear  Int
+  source         String?
+  notes          String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([courseId, countryId, occupation, effectiveYear])
+  @@index([countryId, demandLevel])
+  @@index([occupation])
+  @@index([effectiveYear])
+}
+
+// Career trend snapshots over time (year-over-year). Used for charts and to
+// show "growing / stable / declining" badges.
+model CareerTrend {
+  id         String         @id @default(cuid())
+  courseId   String?
+  course     Course?        @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  countryId  String?
+  country    Country?       @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  occupation String?
+  year       Int
+  direction  TrendDirection
+  // What the value represents — "salary_yoy_pct" | "vacancy_yoy_pct" | "applications" | …
+  metric     String
+  value      Float
+  notes      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([courseId, countryId, year])
+  @@index([occupation, year])
+  @@index([year])
+}
+
+// Persisted recommendation runs — handy for analytics + counsellor review.
+model CareerRecommendation {
+  id           String          @id @default(cuid())
+  leadId       String?
+  lead         LeadSubmission? @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  profile      Json
+  ranked       Json // [{ courseId, countryId, score, breakdown }]
+  topCourseId  String?
+  topCountryId String?
+  locale       Locale?
+  source       String? // "public_form" | "admin_preview" | "import"
+
+  createdAt DateTime @default(now())
+
+  @@index([leadId])
+  @@index([createdAt])
+}
+
+// =============================================================================
+//  Redirects — admin-managed URL aliases for slug renames / legacy URLs
+// =============================================================================
+
+model Redirect {
+  id         String    @id @default(cuid())
+  fromPath   String    @unique
+  toPath     String
+  statusCode Int       @default(301)
+  isActive   Boolean   @default(true)
+  hitCount   Int       @default(0)
+  lastHitAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive])
+}
+
+// =============================================================================
+//  Analytics & Tracking
+//
+//  Design pillars:
+//   - First-party event collection. The browser SDK posts to /api/analytics
+//     and the server writes rows here. Third-party tools (GA4, Clarity,
+//     Hotjar, PostHog) are *additionally* loadable via `AnalyticsConfig`,
+//     but every metric on the admin dashboard comes from these tables — we
+//     never depend on a vendor pixel for our own numbers.
+//   - One `AnalyticsEvent` row per action. Page views, CTA clicks, form
+//     interactions, lead lifecycle transitions, search queries, etc. The
+//     `type` enum is closed; arbitrary properties go in `properties` Json.
+//   - Sessions are aggregated into `AnalyticsSession` (one row per visitor
+//     session) so the dashboard can answer "how many distinct sessions" and
+//     "first-touch attribution" without scanning every event.
+//   - SEO performance is ingested daily from Google Search Console (or any
+//     CSV with the same columns) into `SeoQueryDaily` + `SeoPageDaily`.
+//   - Funnels are admin-configurable: a `FunnelDefinition` lists ordered
+//     steps (event filters) and a rollup job aggregates daily completion.
+// =============================================================================
+
+enum AnalyticsEventType {
+  // Page lifecycle
+  PAGE_VIEW
+  PAGE_LEAVE
+
+  // CTA / links
+  CTA_CLICK
+  EXTERNAL_LINK_CLICK
+  PHONE_CLICK
+  EMAIL_CLICK
+  WHATSAPP_CLICK
+  SOCIAL_CLICK
+
+  // Forms
+  FORM_VIEW
+  FORM_START
+  FORM_FIELD_CHANGE
+  FORM_FIELD_ERROR
+  FORM_STEP_COMPLETE
+  FORM_SUBMIT
+  FORM_SUCCESS
+  FORM_ERROR
+  FORM_ABANDONED
+
+  // Content engagement
+  BLOG_VIEW
+  BLOG_SCROLL_25
+  BLOG_SCROLL_50
+  BLOG_SCROLL_75
+  BLOG_READ_COMPLETE
+  COUNTRY_VIEW
+  COURSE_VIEW
+  RESOURCE_VIEW
+  RESOURCE_DOWNLOAD
+
+  // Search & discovery
+  SEARCH_QUERY
+  SEARCH_RESULT_CLICK
+
+  // Lead lifecycle (server-emitted)
+  LEAD_CREATED
+  LEAD_DEDUPLICATED
+  LEAD_STAGE_CHANGED
+  LEAD_STATUS_CHANGED
+  LEAD_ASSIGNED
+  LEAD_CONTACTED
+  LEAD_WON
+  LEAD_LOST
+
+  // Tooling-specific
+  CHAT_WIDGET_OPEN
+  CHAT_WIDGET_MESSAGE
+  CONSULTATION_BOOKED
+  ELIGIBILITY_CHECKED
+  VISA_RISK_CHECKED
+
+  CUSTOM
+}
+
+enum AnalyticsDevice {
+  DESKTOP
+  TABLET
+  MOBILE
+  BOT
+  UNKNOWN
+}
+
+enum HeatmapProvider {
+  NONE
+  CLARITY
+  HOTJAR
+  POSTHOG
+  FULLSTORY
+}
+
+// One row per discrete action. The hot table. Indexed for the dashboards
+// we ship: time-series by type, by path, by CTA, by form, by UTM.
+model AnalyticsEvent {
+  id String @id @default(cuid())
+
+  type AnalyticsEventType
+  // Free-form name when `type = CUSTOM`. Ignored otherwise but kept for
+  // future custom events without enum bumps.
+  name String?
+
+  // Visitor identifiers — `anonId` is a long-lived first-party cookie,
+  // `sessionId` rotates after 30 minutes of inactivity. `userId` is set
+  // only for admin users; `leadId` is set after the visitor submits a form.
+  anonId    String
+  sessionId String
+  userId    String?
+  leadId    String?
+
+  // Page context
+  path     String
+  referrer String?
+  pageId   String?
+  page     Page?   @relation(fields: [pageId], references: [id], onDelete: SetNull)
+
+  // Optional entity context — at most one of these per event
+  blogPostId String?
+  blogPost   BlogPost? @relation("BlogPostAnalytics", fields: [blogPostId], references: [id], onDelete: SetNull)
+  countryId  String?
+  country    Country?  @relation("CountryAnalytics", fields: [countryId], references: [id], onDelete: SetNull)
+  courseId   String?
+  course     Course?   @relation("CourseAnalytics", fields: [courseId], references: [id], onDelete: SetNull)
+  resourceId String?
+  resource   Resource? @relation("ResourceAnalytics", fields: [resourceId], references: [id], onDelete: SetNull)
+  formId     String?
+  form       LeadForm? @relation("FormAnalytics", fields: [formId], references: [id], onDelete: SetNull)
+
+  // CTA-specific
+  ctaId    String?
+  ctaLabel String?
+  ctaHref  String?
+
+  // Form-specific
+  fieldName    String?
+  formStep     Int?
+  errorMessage String?
+
+  // Generic payload
+  properties Json?
+  value      Float?
+
+  // Attribution snapshot at event time
+  utmSource   String?
+  utmMedium   String?
+  utmCampaign String?
+  utmTerm     String?
+  utmContent  String?
+
+  // Environment
+  countryCode String? // ISO 3166 alpha-2, from GeoIP
+  region      String?
+  city        String?
+  device      AnalyticsDevice @default(UNKNOWN)
+  browser     String?
+  os          String?
+  locale      String?
+  ipHash      String? // SHA-256 of (ip + salt); never store raw IP
+
+  createdAt DateTime @default(now())
+
+  user User?           @relation("AnalyticsUser", fields: [userId], references: [id], onDelete: SetNull)
+  lead LeadSubmission? @relation("LeadAnalytics", fields: [leadId], references: [id], onDelete: SetNull)
+
+  @@index([type, createdAt])
+  @@index([anonId, createdAt])
+  @@index([sessionId, createdAt])
+  @@index([leadId])
+  @@index([path, createdAt])
+  @@index([ctaId, createdAt])
+  @@index([formId, createdAt])
+  @@index([pageId, createdAt])
+  @@index([countryId, createdAt])
+  @@index([utmSource, createdAt])
+  @@index([countryCode, createdAt])
+  @@index([createdAt])
+}
+
+// One row per visitor session (≤ 30min idle gap). Cheap to query for
+// "distinct visitors" and "first-touch attribution" without scanning events.
+model AnalyticsSession {
+  id     String @id @default(cuid())
+  anonId String
+
+  // First-touch attribution snapshot
+  landingPath String
+  referrer    String?
+  utmSource   String?
+  utmMedium   String?
+  utmCampaign String?
+  utmTerm     String?
+  utmContent  String?
+
+  // Environment snapshot
+  device      AnalyticsDevice @default(UNKNOWN)
+  browser     String?
+  os          String?
+  countryCode String?
+  region      String?
+  city        String?
+  locale      String?
+
+  // Rolling aggregates updated by the ingest endpoint
+  pageViews  Int @default(0)
+  eventCount Int @default(0)
+  durationS  Int @default(0)
+
+  startedAt  DateTime  @default(now())
+  lastSeenAt DateTime  @default(now())
+  endedAt    DateTime?
+
+  // Conversion — the lead this session produced (if any)
+  leadId String?
+  lead   LeadSubmission? @relation("LeadSessions", fields: [leadId], references: [id], onDelete: SetNull)
+
+  @@index([anonId, startedAt])
+  @@index([leadId])
+  @@index([startedAt])
+  @@index([utmSource, startedAt])
+  @@index([countryCode, startedAt])
+}
+
+// Google Search Console daily granular rows. Ingested by cron or admin CSV.
+// Composite unique key prevents duplicates on re-import.
+model SeoQueryDaily {
+  id          String   @id @default(cuid())
+  date        DateTime @db.Date
+  query       String
+  page        String
+  countryCode String?  @default("ALL")
+  device      String?  @default("ALL")
+  impressions Int      @default(0)
+  clicks      Int      @default(0)
+  position    Float    @default(0)
+  ctr         Float    @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@unique([date, query, page, countryCode, device])
+  @@index([date])
+  @@index([query])
+  @@index([page, date])
+}
+
+// Per-page daily SEO rollup — derived from SeoQueryDaily during ingest, kept
+// as a separate table so dashboards don't have to aggregate on every load.
+model SeoPageDaily {
+  id          String   @id @default(cuid())
+  date        DateTime @db.Date
+  path        String
+  impressions Int      @default(0)
+  clicks      Int      @default(0)
+  avgPosition Float    @default(0)
+  ctr         Float    @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@unique([date, path])
+  @@index([date])
+  @@index([path, date])
+}
+
+// Singleton — at most one row. Admins flip providers and paste IDs/keys.
+// Read by the heatmap script component and the GA pixel.
+model AnalyticsConfig {
+  id String @id @default("singleton")
+
+  // Pixel / measurement
+  ga4MeasurementId String?
+  gtmContainerId   String?
+  metaPixelId      String?
+
+  // Heatmap / session replay
+  heatmapProvider  HeatmapProvider @default(NONE)
+  clarityProjectId String?
+  hotjarSiteId     String?
+  posthogApiKey    String?
+  posthogHost      String? // self-hosted PostHog endpoint
+  fullstoryOrgId   String?
+
+  // First-party analytics knobs
+  respectDoNotTrack Boolean @default(true)
+  ipHashSalt        String? // rotated to invalidate visitor reidentification
+  // Cookie-less consent mode (anonId only set after consent banner accept).
+  requireConsent    Boolean @default(false)
+
+  // Search Console integration
+  gscSiteUrl    String?
+  gscLastSyncAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Funnel = ordered list of `AnalyticsEventType`s a visitor must hit, in order,
+// within `windowHours`. The `filter` on each step is a small Json predicate
+// (e.g. `{ "path": "/eligibility" }` or `{ "formId": "abc" }`).
+model FunnelDefinition {
+  id          String  @id @default(cuid())
+  slug        String  @unique
+  name        String
+  description String?
+
+  // [{ name, eventType, filter? (Json) }]
+  steps Json
+
+  windowHours Int     @default(168) // 7 days
+  isActive    Boolean @default(true)
+
+  rollups FunnelDailyRollup[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive])
+}
+
+// Pre-computed per-day per-step entry counts. Rebuilt by the rollup job;
+// dashboards read this rather than scanning AnalyticsEvent on every render.
+model FunnelDailyRollup {
+  id          String           @id @default(cuid())
+  funnelId    String
+  funnel      FunnelDefinition @relation(fields: [funnelId], references: [id], onDelete: Cascade)
+  date        DateTime         @db.Date
+  // [{ step: 0, anonIds: 100, conversions: 22 }, ...]
+  stepStats   Json
+  // total visitors who entered step 0 on this day
+  entrants    Int              @default(0)
+  // visitors who completed the final step within `windowHours`
+  conversions Int              @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@unique([funnelId, date])
+  @@index([date])
+}
+
+// =============================================================================
+//  Security / Audit
+//
+//  Append-only audit trail. Anything that mutates state, grants access, or
+//  could be subject to investigation should write a row here. The `actor*`
+//  fields are denormalized so the log survives user deletion.
+// =============================================================================
+
+enum AuditAction {
+  // Auth lifecycle
+  LOGIN_SUCCESS
+  LOGIN_FAILURE
+  LOGIN_LOCKED
+  LOGOUT
+  PASSWORD_CHANGED
+  SESSION_REVOKED
+  PERMISSION_DENIED
+  // Generic CRUD — `entity` distinguishes which resource.
+  CREATE
+  UPDATE
+  DELETE
+  PUBLISH
+  UNPUBLISH
+  EXPORT
+  IMPORT
+  // Rate / abuse signals
+  RATE_LIMITED
+  CSRF_REJECTED
+}
+
+enum AuditStatus {
+  SUCCESS
+  FAILURE
+}
+
+model AuditLog {
+  id          String      @id @default(cuid())
+  action      AuditAction
+  status      AuditStatus @default(SUCCESS)
+  entity      String?
+  entityId    String?
+
+  // Denormalized so log rows outlive their actor.
+  actorId     String?
+  actorEmail  String?
+  actorRole   UserRole?
+  actor       User?       @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  ipAddress   String?
+  userAgent   String?
+  // Free-form context: changed fields, request path, error code, etc.
+  // Anything that needs structured querying should get its own column.
+  metadata    Json?
+
+  createdAt   DateTime    @default(now())
+
+  @@index([action, createdAt])
+  @@index([actorId, createdAt])
+  @@index([entity, entityId])
+  @@index([createdAt])
+}

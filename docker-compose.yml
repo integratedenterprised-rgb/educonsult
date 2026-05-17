@@ -1,0 +1,133 @@
+# Persistence guarantee:
+#   - postgres_data  → all DB rows
+#   - minio_data     → all uploaded images/files
+#   - caddy_data     → Let's Encrypt certs (avoid rate-limit on redeploy)
+#   - caddy_config   → Caddy state
+# These are NAMED volumes. `docker compose down` (without -v) keeps them.
+# Never run `docker compose down -v` on this host — it erases all volumes.
+
+name: aeroabroad
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-aeroabroad}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
+      POSTGRES_DB: ${POSTGRES_DB:-aeroabroad}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aeroabroad} -d ${POSTGRES_DB:-aeroabroad}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - internal
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER required}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD required}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    networks:
+      - internal
+
+  # One-shot: create the bucket on first boot, make /media public-readable.
+  # Idempotent — re-running this service is safe.
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: "no"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?}
+      S3_BUCKET: ${S3_BUCKET:-media}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"
+        mc mb --ignore-existing local/$$S3_BUCKET
+        mc version enable local/$$S3_BUCKET || true
+        mc anonymous set download local/$$S3_BUCKET
+        echo "bucket $$S3_BUCKET ready"
+    networks:
+      - internal
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aeroabroad-app:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    env_file:
+      - .env.production
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-aeroabroad}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-aeroabroad}?schema=public
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: us-east-1
+      S3_BUCKET: ${S3_BUCKET:-media}
+      S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      S3_PUBLIC_URL_BASE: https://aeroabroad.com.np/media
+    # Apply Prisma migrations on every start. `migrate deploy` only runs
+    # committed migrations — it never drops or auto-alters production data.
+    command: >
+      sh -c "npx prisma migrate deploy && node server.js"
+    networks:
+      - internal
+      - web
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+      - minio
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - web
+
+volumes:
+  postgres_data:
+    name: aeroabroad_postgres_data
+  minio_data:
+    name: aeroabroad_minio_data
+  caddy_data:
+    name: aeroabroad_caddy_data
+  caddy_config:
+    name: aeroabroad_caddy_config
+
+networks:
+  internal:
+    driver: bridge
+  web:
+    driver: bridge

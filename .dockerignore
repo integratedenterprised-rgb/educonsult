@@ -1,0 +1,17 @@
+node_modules
+.next
+.git
+.github
+.vscode
+.idea
+.DS_Store
+*.log
+coverage
+tests
+docs
+.env
+.env.*
+!.env.production.example
+tsconfig.tsbuildinfo
+README.md
+DEPLOY.md
