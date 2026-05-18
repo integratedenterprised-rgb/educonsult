@@ -17,7 +17,8 @@
 import "server-only";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { z, type ZodSchema } from "zod";
+import type { z} from "zod";
+import { type ZodSchema } from "zod";
 import { ApiErrors, ok } from "./response";
 import {
   checkRateLimit,

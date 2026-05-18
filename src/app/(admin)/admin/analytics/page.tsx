@@ -123,7 +123,7 @@ export default async function AnalyticsOverviewPage() {
 function SubNav({ href, label, active }: { href: string; label: string; active?: boolean }) {
   return (
     <Link
-      href={href}
+      href={href as never}
       className={`rounded-md border px-3 py-1.5 text-xs font-medium transition ${
         active
           ? "border-primary bg-primary text-primary-foreground"

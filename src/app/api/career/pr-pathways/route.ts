@@ -2,7 +2,7 @@
  * Public PR pathways index — list active PR pathways, optionally filtered
  * by destination country. Includes steps for the requested locale.
  */
-import { NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 import type { Locale } from "@prisma/client";
 import { ok } from "@/server/api/response";
 import { prisma } from "@/lib/prisma";

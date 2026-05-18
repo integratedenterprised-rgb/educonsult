@@ -34,7 +34,7 @@ function parse<T>(
   if (conditionRaw) {
     try {
       condition = JSON.parse(conditionRaw);
-    } catch (e) {
+    } catch {
       return { ok: false, error: "Condition must be valid JSON" };
     }
   }

@@ -19,6 +19,11 @@ import { getPublicAnalyticsConfig } from "@/server/analytics/config.service";
  * Suspense with `fallback={null}` would briefly blank the screen if anything
  * inside ever suspends; scope it tightly to the analytics machinery instead.
  */
+// Skip static prerender for public pages — they read from Prisma, which is
+// unreachable during the Docker build stage. Runtime caching is handled at
+// the service layer via unstable_cache, so per-request rendering stays fast.
+export const dynamic = "force-dynamic";
+
 export default async function SiteLayout({ children }: { children: React.ReactNode }) {
   const analyticsConfig = await getPublicAnalyticsConfig();
   return (

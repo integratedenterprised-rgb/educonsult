@@ -10,7 +10,8 @@
  * batch" check via the zod schema. DNT and bot UAs are dropped inside
  * `ingestBatch()`.
  */
-import { NextRequest, NextResponse } from "next/server";
+import type { NextRequest} from "next/server";
+import { NextResponse } from "next/server";
 import { ApiErrors, ok } from "@/server/api/response";
 import { eventBatchSchema } from "@/lib/analytics/types";
 import { ingestBatch } from "@/server/analytics/events.service";

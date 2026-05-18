@@ -15,7 +15,8 @@
  *  - Recursive text sanitization on the payload — neutralizes any accidental
  *    HTML in free-text fields before it lands in the DB.
  */
-import { NextRequest, NextResponse } from "next/server";
+import type { NextRequest} from "next/server";
+import { NextResponse } from "next/server";
 import { ApiErrors, ok } from "@/server/api/response";
 import { parsePublicLead } from "@/lib/validators/lead";
 import { submitPublicLead } from "@/server/leads/intake";

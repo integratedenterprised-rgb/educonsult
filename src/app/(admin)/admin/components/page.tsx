@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Plus, Copy } from "lucide-react";
+import { Plus } from "lucide-react";
 import { requirePermission } from "@/server/auth/session";
 import { listComponents } from "@/server/cms/admin-component.service";
 import { Button } from "@/components/ui/atoms/button";

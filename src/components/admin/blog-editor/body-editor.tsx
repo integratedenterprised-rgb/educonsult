@@ -11,7 +11,7 @@
  * The editor also surfaces live word count / reading time so authors know
  * when the article passes the "thin content" threshold.
  */
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useFormContext } from "react-hook-form";
 import {
   Bold,

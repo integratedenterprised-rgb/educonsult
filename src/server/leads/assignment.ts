@@ -16,7 +16,7 @@
  * unassigned and shows up in the "Unassigned" admin filter.
  */
 import "server-only";
-import { Prisma } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 
 const OPEN_STATUSES: Prisma.LeadSubmissionWhereInput["status"] = {

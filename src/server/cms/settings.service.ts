@@ -13,9 +13,26 @@ function pickString(map: Map<string, unknown>, key: string, fallback = ""): stri
   return String(v);
 }
 
+function emptySettings(): SiteSettingsDto {
+  return {
+    name: siteConfig.fallbackName,
+    tagline: "",
+    logoUrl: "",
+    contact: { email: "", phone: "", address: "" },
+    social: { facebook: "", instagram: "", linkedin: "" },
+  };
+}
+
 export const getSiteSettings = unstable_cache(
   async (): Promise<SiteSettingsDto> => {
-    const rows = await prisma.siteSetting.findMany({ where: { isPublic: true } });
+    let rows: { key: string; value: unknown }[] = [];
+    try {
+      rows = await prisma.siteSetting.findMany({ where: { isPublic: true } });
+    } catch {
+      // DB unreachable (typically during Docker build prerender). Return
+      // defaults; runtime requests will revalidate against the live DB.
+      return emptySettings();
+    }
     const map = new Map(rows.map((r) => [r.key, r.value]));
     return {
       name: pickString(map, "site.name", siteConfig.fallbackName),

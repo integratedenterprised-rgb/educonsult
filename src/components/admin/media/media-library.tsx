@@ -22,7 +22,7 @@ export function MediaLibrary({ initialItems, initialPage, totalPages, folders, c
   const params = useSearchParams();
   const [items, setItems] = useState<Media[]>(initialItems);
   const [busy, setBusy] = useState<{ filename: string; progress: number }[]>([]);
-  const [_, start] = useTransition();
+  const [, start] = useTransition();
 
   async function onFiles(files: FileList | null) {
     if (!files || files.length === 0) return;

@@ -4,7 +4,7 @@
  * live. Returns the full result including dimension scores and the applied
  * weight overrides.
  */
-import { NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 import { z } from "zod";
 import { ApiErrors, ok } from "@/server/api/response";
 import {

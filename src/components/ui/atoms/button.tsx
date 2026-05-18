@@ -79,6 +79,8 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     const isDisabled = disabled || loading;
     const resolvedVariant = resolveVariant(variant);
 
+    // Radix Slot requires exactly one child element. When asChild is set we
+    // delegate styling to the wrapped element and skip the spinner slot.
     return (
       <Comp
         className={cn(buttonVariants({ variant: resolvedVariant, size, fullWidth, className }))}
@@ -87,8 +89,14 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         disabled={isDisabled}
         {...props}
       >
-        {loading ? <Spinner size={size === "sm" ? "xs" : "sm"} label="Submitting" /> : null}
-        {children}
+        {asChild ? (
+          children
+        ) : (
+          <>
+            {loading ? <Spinner size={size === "sm" ? "xs" : "sm"} label="Submitting" /> : null}
+            {children}
+          </>
+        )}
       </Comp>
     );
   },

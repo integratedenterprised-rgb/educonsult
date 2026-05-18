@@ -21,7 +21,7 @@
  * fire-and-forget so a slow SMTP doesn't bottleneck form submission.
  */
 import "server-only";
-import { Prisma } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 import { unstable_after } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { scoreLead } from "./scoring";

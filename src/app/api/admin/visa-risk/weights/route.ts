@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 import { z } from "zod";
 import { ApiErrors, ok } from "@/server/api/response";
 import { bucketsSchema, categoryWeightsSchema } from "@/lib/validators/visa-risk";

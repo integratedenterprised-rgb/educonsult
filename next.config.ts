@@ -11,7 +11,7 @@ const nextConfig: NextConfig = {
   output: "standalone",
 
   experimental: {
-    typedRoutes: true,
+    typedRoutes: false,
     serverActions: { bodySizeLimit: "2mb" },
     optimizePackageImports: [
       "lucide-react",

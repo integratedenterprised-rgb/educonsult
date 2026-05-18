@@ -13,7 +13,7 @@ export default async function NewPostRoute() {
       <div>
         <h1 className="font-heading text-2xl font-semibold tracking-tight">New post</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Choose a title and slug — you'll fill in the body, SEO, and CTAs on the next screen.
+          Choose a title and slug — you&apos;ll fill in the body, SEO, and CTAs on the next screen.
         </p>
       </div>
       <NewPostForm />

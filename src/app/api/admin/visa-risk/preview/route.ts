@@ -3,7 +3,7 @@
  * rule set (or an optional draft rule overlay) so the editor can preview the
  * outcome without persisting.
  */
-import { NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 import { ApiErrors, ok } from "@/server/api/response";
 import { applicantProfileSchema, predicateSchema, riskLevelSchema } from "@/lib/validators/visa-risk";
 import { previewAssessment, previewWithDraft } from "@/server/visa-risk/admin.service";

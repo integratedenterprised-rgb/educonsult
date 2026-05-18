@@ -2,7 +2,7 @@
  * Public single-course detail. Returns the course with its country mappings,
  * outcomes, salary bands (mid-level, latest year), and demand signals.
  */
-import { NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 import type { Locale } from "@prisma/client";
 import { ApiErrors, ok } from "@/server/api/response";
 import { prisma } from "@/lib/prisma";

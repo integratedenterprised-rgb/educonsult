@@ -2,7 +2,7 @@
  * Public courses index. Returns active, published courses with their default
  * translation (locale-aware via `?locale=NE` etc.).
  */
-import { NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 import type { Prisma } from "@prisma/client";
 import { ok } from "@/server/api/response";
 import { prisma } from "@/lib/prisma";

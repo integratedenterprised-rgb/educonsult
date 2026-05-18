@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 import { ApiErrors, ok } from "@/server/api/response";
 import { courseUpdateSchema } from "@/lib/validators/career";
 import { deleteCourse, getCourse, updateCourse } from "@/server/career/admin.service";

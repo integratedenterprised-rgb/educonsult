@@ -16,7 +16,6 @@ import Link from "next/link";
 import { FormProvider, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { ArrowLeft, ExternalLink } from "lucide-react";
-import { Button } from "@/components/ui/atoms/button";
 import {
   Tabs,
   TabsList,
@@ -25,7 +24,6 @@ import {
 } from "@/components/ui/organisms/tabs";
 import { blogPostUpdateSchema } from "@/lib/validators/blog";
 import { scoreSeo } from "@/lib/seo";
-import { readingMetrics } from "@/lib/blog";
 import type { ApiResponse } from "@/types/api";
 import type { OptionRef, OtherPostRef, PostEditorValues } from "./types";
 import { ContentTab } from "./content-tab";
@@ -70,7 +68,6 @@ export function PostEditor({
   const watch = methods.watch();
 
   const seoScore = useMemo(() => {
-    const metrics = readingMetrics(watch.body ?? "");
     return scoreSeo({
       title: watch.title ?? "",
       metaTitle: watch.seoTitle,

@@ -16,7 +16,7 @@
  * providers); in dev the no-op adapters log to console.
  */
 import "server-only";
-import { Prisma } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { emailAdapter, whatsappAdapter } from "./channels";
 import { renderTemplate, type LeadTemplateKey } from "./templates";

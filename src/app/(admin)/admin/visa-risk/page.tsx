@@ -111,7 +111,7 @@ export default async function VisaRiskAdminPage() {
         >
           <h2 className="font-semibold">Category weights</h2>
           <p className="text-xs text-muted-foreground">
-            Multiplier applied to every triggered rule's score. 1.0 = use the rule's own score; 1.5 = inflate by 50%.
+            Multiplier applied to every triggered rule&apos;s score. 1.0 = use the rule&apos;s own score; 1.5 = inflate by 50%.
           </p>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             {(

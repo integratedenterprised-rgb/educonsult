@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 import { ApiErrors } from "@/server/api/response";
 import { leadListQuerySchema } from "@/lib/validators/lead";
 import { exportLeadsCsv } from "@/server/leads/admin.service";

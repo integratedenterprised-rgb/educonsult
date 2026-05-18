@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 import { ApiErrors, ok } from "@/server/api/response";
 import { prPathwayUpdateSchema } from "@/lib/validators/career";
 import { deletePrPathway, getPrPathway, updatePrPathway } from "@/server/career/admin.service";

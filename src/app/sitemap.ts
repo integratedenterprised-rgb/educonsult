@@ -50,28 +50,40 @@ function priorityFor(template: string | null, isHomepage: boolean): number {
 }
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
-  const [pages, posts, categories, tags, authors] = await Promise.all([
-    prisma.page.findMany({
-      where: { status: "PUBLISHED", deletedAt: null },
-      select: { slug: true, isHomepage: true, updatedAt: true, template: true },
-    }),
-    prisma.blogPost.findMany({
-      where: { status: "PUBLISHED", deletedAt: null },
-      select: { slug: true, updatedAt: true, isFeatured: true },
-    }),
-    prisma.category.findMany({
-      where: { deletedAt: null },
-      select: { slug: true, updatedAt: true },
-    }),
-    prisma.tag.findMany({
-      where: { deletedAt: null },
-      select: { slug: true, updatedAt: true },
-    }),
-    prisma.author.findMany({
-      where: { deletedAt: null },
-      select: { slug: true, updatedAt: true },
-    }),
-  ]);
+  // DB may be unreachable during the Docker build stage; in that case emit a
+  // minimal sitemap and let ISR (revalidate=3600) backfill on the first
+  // request after the runtime container connects to Postgres.
+  let pages: { slug: string; isHomepage: boolean; updatedAt: Date; template: string | null }[] = [];
+  let posts: { slug: string; updatedAt: Date; isFeatured: boolean }[] = [];
+  let categories: { slug: string; updatedAt: Date }[] = [];
+  let tags: { slug: string; updatedAt: Date }[] = [];
+  let authors: { slug: string; updatedAt: Date }[] = [];
+  try {
+    [pages, posts, categories, tags, authors] = await Promise.all([
+      prisma.page.findMany({
+        where: { status: "PUBLISHED", deletedAt: null },
+        select: { slug: true, isHomepage: true, updatedAt: true, template: true },
+      }),
+      prisma.blogPost.findMany({
+        where: { status: "PUBLISHED", deletedAt: null },
+        select: { slug: true, updatedAt: true, isFeatured: true },
+      }),
+      prisma.category.findMany({
+        where: { deletedAt: null },
+        select: { slug: true, updatedAt: true },
+      }),
+      prisma.tag.findMany({
+        where: { deletedAt: null },
+        select: { slug: true, updatedAt: true },
+      }),
+      prisma.author.findMany({
+        where: { deletedAt: null },
+        select: { slug: true, updatedAt: true },
+      }),
+    ]);
+  } catch {
+    return [{ url: siteConfig.url, lastModified: new Date(), changeFrequency: "daily", priority: 1.0 }];
+  }
 
   const entries: MetadataRoute.Sitemap = pages.map((p) => ({
     url: `${siteConfig.url}${p.isHomepage ? "/" : `/${p.slug}`}`,

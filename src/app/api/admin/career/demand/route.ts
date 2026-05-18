@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 import { ApiErrors, ok } from "@/server/api/response";
 import { demandSignalUpsertSchema } from "@/lib/validators/career";
 import { listDemandSignals, upsertDemandSignal } from "@/server/career/admin.service";

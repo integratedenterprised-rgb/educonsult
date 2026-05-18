@@ -14,12 +14,18 @@ export const revalidate = 300;
  * on-demand ISR generation.
  */
 export async function generateStaticParams() {
-  const { prisma } = await import("@/lib/prisma");
-  const pages = await prisma.page.findMany({
-    where: { status: "PUBLISHED", isHomepage: false, deletedAt: null },
-    select: { slug: true },
-  });
-  return pages.map((p) => ({ slug: p.slug.split("/").filter(Boolean) }));
+  try {
+    const { prisma } = await import("@/lib/prisma");
+    const pages = await prisma.page.findMany({
+      where: { status: "PUBLISHED", isHomepage: false, deletedAt: null },
+      select: { slug: true },
+    });
+    return pages.map((p) => ({ slug: p.slug.split("/").filter(Boolean) }));
+  } catch {
+    // DB unreachable at build time (e.g. inside Docker build stage). Fall back
+    // to on-demand ISR — pages render on first request and cache thereafter.
+    return [];
+  }
 }
 import { getSiteSettings } from "@/server/cms/settings.service";
 import { SectionRenderer } from "@/components/cms/section-renderer";

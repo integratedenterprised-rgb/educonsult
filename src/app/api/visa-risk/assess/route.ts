@@ -12,7 +12,7 @@
  * SiteSetting lookups + (optional) one write for the lead. No queues, no
  * background work.
  */
-import { NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 import { ApiErrors, ok } from "@/server/api/response";
 import { visaRiskAssessSchema } from "@/lib/validators/visa-risk";
 import { assess } from "@/server/visa-risk/engine";

@@ -13,7 +13,7 @@
  */
 import "server-only";
 import { unstable_cache, revalidateTag } from "next/cache";
-import { Prisma } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { siteConfig } from "@/lib/config";
 import { rankRelated, type RelatedCandidate } from "@/lib/blog";

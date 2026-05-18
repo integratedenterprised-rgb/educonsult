@@ -12,8 +12,8 @@ export default async function RolesPage() {
 
   const groups: Record<string, Permission[]> = {};
   for (const p of ALL_PERMISSIONS) {
-    const module = p.split(".")[0] ?? p;
-    (groups[module] ??= []).push(p);
+    const mod = p.split(".")[0] ?? p;
+    (groups[mod] ??= []).push(p);
   }
 
   return (
@@ -35,11 +35,11 @@ export default async function RolesPage() {
               ))}
             </tr>
           </thead>
-          {Object.entries(groups).map(([module, perms]) => (
-            <tbody key={module} className="divide-y divide-border">
+          {Object.entries(groups).map(([mod, perms]) => (
+            <tbody key={mod} className="divide-y divide-border">
               <tr className="bg-muted/30">
                 <td colSpan={ROLES.length + 1} className="px-4 py-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  {module}
+                  {mod}
                 </td>
               </tr>
               {perms.map((p) => (

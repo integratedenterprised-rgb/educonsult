@@ -21,9 +21,16 @@ const THEME_TAG = "cms:theme";
 
 export const getActiveTheme = unstable_cache(
   async (): Promise<ActiveTheme> => {
-    const row =
-      (await prisma.siteTheme.findFirst({ where: { isActive: true } })) ??
-      (await prisma.siteTheme.findFirst({ where: { isDefault: true } }));
+    let row: Awaited<ReturnType<typeof prisma.siteTheme.findFirst>> = null;
+    try {
+      row =
+        (await prisma.siteTheme.findFirst({ where: { isActive: true } })) ??
+        (await prisma.siteTheme.findFirst({ where: { isDefault: true } }));
+    } catch {
+      // DB unreachable (typically during Docker build prerender). Use the
+      // fallback theme; runtime requests will hit the live DB and revalidate.
+      return { ...FALLBACK_THEME, id: "fallback", key: "fallback", name: "Fallback" };
+    }
 
     if (!row) return { ...FALLBACK_THEME, id: "fallback", key: "fallback", name: "Fallback" };
 

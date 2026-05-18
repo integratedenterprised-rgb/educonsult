@@ -16,7 +16,7 @@
  */
 import "server-only";
 
-import { Prisma } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import type {
   CareerCategoryWeightsInput,

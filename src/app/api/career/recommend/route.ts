@@ -8,7 +8,7 @@
  * see the verdict alongside the contact. Non-fatal: the recommendation is
  * returned even if lead capture fails.
  */
-import { NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 import type { Prisma } from "@prisma/client";
 import { ApiErrors, ok } from "@/server/api/response";
 import { careerRecommendSchema } from "@/lib/validators/career";

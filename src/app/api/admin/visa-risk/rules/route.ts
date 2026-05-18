@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 import { ApiErrors, ok } from "@/server/api/response";
 import { ruleUpsertSchema } from "@/lib/validators/visa-risk";
 import { createRule, listRules } from "@/server/visa-risk/admin.service";

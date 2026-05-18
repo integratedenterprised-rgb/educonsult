@@ -10,7 +10,8 @@
  */
 import "server-only";
 
-import { Prisma, type RiskLevel } from "@prisma/client";
+import type { Prisma} from "@prisma/client";
+import { type RiskLevel } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import type {
   BucketsInput,
@@ -19,7 +20,7 @@ import type {
   RuleUpsertInput,
 } from "@/lib/validators/visa-risk";
 import { assessWith, loadCategoryWeights, loadRiskBuckets, loadRulesForCountry } from "./engine";
-import { DEFAULT_CATEGORY_WEIGHTS } from "./weights";
+import type { DEFAULT_CATEGORY_WEIGHTS } from "./weights";
 import type { ApplicantProfile, Predicate } from "./dsl";
 
 // ── Rules ──────────────────────────────────────────────────────────────────
