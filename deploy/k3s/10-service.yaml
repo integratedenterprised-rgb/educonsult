@@ -1,0 +1,18 @@
+# Service + manual EndpointSlice pointing at the docker-compose `app` container
+# bound on the host at 127.0.0.1:3001. Because we set no `selector`, k8s does
+# NOT auto-manage Endpoints — we provide them ourselves in 11-endpoints.yaml
+# (where the node IP is substituted at apply time).
+apiVersion: v1
+kind: Service
+metadata:
+  name: aeroabroad-app
+  namespace: aeroabroad
+  labels:
+    app.kubernetes.io/name: aeroabroad
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: 3001
+      protocol: TCP

@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aeroabroad
+  labels:
+    app.kubernetes.io/name: aeroabroad
+    app.kubernetes.io/managed-by: docker-compose

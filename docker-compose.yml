@@ -1,10 +1,14 @@
 # Persistence guarantee:
 #   - postgres_data  → all DB rows
 #   - minio_data     → all uploaded images/files
-#   - caddy_data     → Let's Encrypt certs (avoid rate-limit on redeploy)
-#   - caddy_config   → Caddy state
 # These are NAMED volumes. `docker compose down` (without -v) keeps them.
 # Never run `docker compose down -v` on this host — it erases all volumes.
+#
+# Host networking:
+#   - This stack does NOT bind 80/443. Those ports are owned by the HMS team's
+#     ingress-nginx on the shared VPS. The app is exposed only on loopback at
+#     127.0.0.1:3001 and reverse-proxied by an ingress-nginx Ingress (see
+#     deploy/k3s/). Public TLS is handled by cert-manager.
 
 name: aeroabroad
 
@@ -92,42 +96,23 @@ services:
       S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
       S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
       S3_PUBLIC_URL_BASE: https://aeroabroad.com.np/media
+    # Expose ONLY on loopback. The k3s ingress on the host reaches us via
+    # 127.0.0.1:3001 → routed in by deploy/k3s/endpoints.yaml.
+    ports:
+      - "127.0.0.1:3001:3000"
     # Apply Prisma migrations on every start. `migrate deploy` only runs
     # committed migrations — it never drops or auto-alters production data.
     command: >
       sh -c "npx prisma migrate deploy && node server.js"
     networks:
       - internal
-      - web
-
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    depends_on:
-      - app
-      - minio
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    networks:
-      - web
 
 volumes:
   postgres_data:
     name: aeroabroad_postgres_data
   minio_data:
     name: aeroabroad_minio_data
-  caddy_data:
-    name: aeroabroad_caddy_data
-  caddy_config:
-    name: aeroabroad_caddy_config
 
 networks:
   internal:
-    driver: bridge
-  web:
     driver: bridge
