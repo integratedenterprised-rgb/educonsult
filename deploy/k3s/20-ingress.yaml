@@ -19,11 +19,14 @@ spec:
   ingressClassName: nginx
   tls:
     - hosts:
-        - aeroabroad.com.np
-        - www.aeroabroad.com.np
+        - aeroabroad.147181.com
+        # When aeroabroad.com.np is registered + DNS-pointed, append it here
+        # and re-apply; cert-manager will issue a SAN cert covering both.
+        # - aeroabroad.com.np
+        # - www.aeroabroad.com.np
       secretName: aeroabroad-tls
   rules:
-    - host: aeroabroad.com.np
+    - host: aeroabroad.147181.com
       http:
         paths:
           - path: /
@@ -33,13 +36,5 @@ spec:
                 name: aeroabroad-app
                 port:
                   number: 80
-    - host: www.aeroabroad.com.np
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: aeroabroad-app
-                port:
-                  number: 80
+    # When aeroabroad.com.np is live, mirror these path blocks under the new host
+    # and re-apply. Until then, the temp subdomain is the canonical URL.
