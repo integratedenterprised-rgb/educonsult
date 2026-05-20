@@ -24,9 +24,11 @@ const AUTH_COOKIE = process.env.NODE_ENV === "production"
   ? "__Secure-authjs.session-token"
   : "authjs.session-token";
 
-// CSP is enforced in production, report-only everywhere else so the dev
-// server stays usable while you iterate.
-const CSP_REPORT_ONLY = process.env.NODE_ENV !== "production";
+// CSP is report-only until the nonce propagation pipeline through Next's
+// standalone production server is fixed. Enforcing breaks client-side
+// hydration when Next-generated script nonces don't match the middleware's
+// response-header nonce. See follow-up task in the project notes.
+const CSP_REPORT_ONLY = true;
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
@@ -65,15 +67,21 @@ export function middleware(req: NextRequest) {
 
   // 3. CSP + nonce — applied to every non-static path. The nonce travels
   //    through request headers so server components can attach it to inline
-  //    <Script> tags.
+  //    <Script> tags. Next.js's render pipeline parses the CSP from REQUEST
+  //    headers to discover the nonce for framework-injected scripts; without
+  //    it, Next generates its own nonce and the response CSP won't match,
+  //    breaking strict-dynamic.
   const nonce = generateNonce();
+  const cspValue = !isApiPath ? buildCsp({ nonce }) : null;
+
   const requestHeaders = new Headers(req.headers);
   requestHeaders.set("x-nonce", nonce);
+  if (cspValue) requestHeaders.set(cspHeaderName(CSP_REPORT_ONLY), cspValue);
 
   const res = NextResponse.next({ request: { headers: requestHeaders } });
 
-  if (!isApiPath) {
-    res.headers.set(cspHeaderName(CSP_REPORT_ONLY), buildCsp({ nonce }));
+  if (cspValue) {
+    res.headers.set(cspHeaderName(CSP_REPORT_ONLY), cspValue);
   }
   res.headers.set("x-nonce", nonce);
   // Belt-and-suspenders cross-origin isolation. next.config.ts emits these
