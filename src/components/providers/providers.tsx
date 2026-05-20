@@ -7,6 +7,8 @@ interface ProvidersProps {
   children: React.ReactNode;
   /** When true, force the `.dark` Tailwind variant regardless of system preference. */
   forcedDark?: boolean;
+  /** Per-request CSP nonce, stamped onto next-themes' inline bootstrap script. */
+  nonce?: string;
 }
 
 /**
@@ -18,6 +20,10 @@ interface ProvidersProps {
  * "Midnight" theme would apply the dark CSS vars but leave `dark:` modifiers
  * inert.
  */
-export function Providers({ children, forcedDark }: ProvidersProps) {
-  return <ThemeProvider forcedDark={forcedDark}>{children}</ThemeProvider>;
+export function Providers({ children, forcedDark, nonce }: ProvidersProps) {
+  return (
+    <ThemeProvider forcedDark={forcedDark} nonce={nonce}>
+      {children}
+    </ThemeProvider>
+  );
 }

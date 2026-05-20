@@ -14,9 +14,11 @@ import { ThemeProvider as NextThemesProvider } from "next-themes";
 export function ThemeProvider({
   children,
   forcedDark,
+  nonce,
 }: {
   children: React.ReactNode;
   forcedDark?: boolean;
+  nonce?: string;
 }) {
   return (
     <NextThemesProvider
@@ -25,6 +27,7 @@ export function ThemeProvider({
       enableSystem
       disableTransitionOnChange
       forcedTheme={forcedDark ? "dark" : undefined}
+      nonce={nonce}
     >
       {children}
     </NextThemesProvider>

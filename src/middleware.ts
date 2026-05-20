@@ -24,11 +24,11 @@ const AUTH_COOKIE = process.env.NODE_ENV === "production"
   ? "__Secure-authjs.session-token"
   : "authjs.session-token";
 
-// CSP is report-only until the nonce propagation pipeline through Next's
-// standalone production server is fixed. Enforcing breaks client-side
-// hydration when Next-generated script nonces don't match the middleware's
-// response-header nonce. See follow-up task in the project notes.
-const CSP_REPORT_ONLY = true;
+// CSP is enforced in production, report-only in dev so HMR / eval keep
+// working. For per-request nonces to reach the framework's injected scripts
+// the page must be rendered per-request — see `dynamic = "force-dynamic"`
+// in `app/layout.tsx`.
+const CSP_REPORT_ONLY = process.env.NODE_ENV !== "production";
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;

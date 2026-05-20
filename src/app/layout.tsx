@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { headers } from "next/headers";
 import { Inter, Poppins } from "next/font/google";
 import { ThemeStyle } from "@/components/providers/theme-style";
 import { Providers } from "@/components/providers/providers";
@@ -9,6 +10,13 @@ import { buildMetadata, organizationJsonLd, websiteJsonLd } from "@/lib/seo";
 import { siteConfig } from "@/lib/config";
 import { cn } from "@/lib/utils";
 import "./globals.css";
+
+// Force per-request rendering so middleware's CSP nonce is available to
+// Next's render pipeline. Without this, Next prerenders the layout shell at
+// build time (no request → no nonce) and the runtime CSP nonce won't match
+// the cached HTML's script nonces. Data fetches inside the layout already
+// hit unstable_cache, so the cost is small.
+export const dynamic = "force-dynamic";
 
 // Body font. `display: swap` shows fallback immediately (no FOIT). next/font
 // self-hosts the file, so no third-party DNS / TLS on the critical path.
@@ -50,7 +58,8 @@ export const viewport: Viewport = {
 };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  const [theme, settings] = await Promise.all([getActiveTheme(), getSiteSettings()]);
+  const [theme, settings, hdrs] = await Promise.all([getActiveTheme(), getSiteSettings(), headers()]);
+  const nonce = hdrs.get("x-nonce") ?? undefined;
 
   // Organization + WebSite schemas emit once site-wide. Per-page schemas
   // (WebPage, Article, BreadcrumbList, FAQPage) are emitted by the leaf route.
@@ -80,7 +89,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         <JsonLd data={[orgLd, siteLd]} />
       </head>
       <body className="flex min-h-screen flex-col">
-        <Providers forcedDark={theme.isDarkMode}>{children}</Providers>
+        <Providers forcedDark={theme.isDarkMode} nonce={nonce}>{children}</Providers>
       </body>
     </html>
   );
