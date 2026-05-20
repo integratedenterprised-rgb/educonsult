@@ -15,11 +15,14 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
-# Build-time env shims so `next build` can statically analyze the client env.
-# Real values are injected at runtime via docker-compose.
+# Build-time env shims. `next build` evaluates server modules during "collect
+# page data" — server env validation (lib/env.ts) runs and would crash without
+# these. Real values are injected at runtime via docker-compose env_file.
 ENV NEXT_PUBLIC_SITE_URL=https://aeroabroad.com.np
 ENV NEXT_PUBLIC_SITE_NAME="Aero Abroad"
 ENV NEXT_PUBLIC_DEFAULT_LOCALE=en
+ENV DATABASE_URL=postgresql://build:build@localhost:5432/build
+ENV AUTH_SECRET=build_time_dummy_secret_min_16_chars
 RUN npx prisma generate
 RUN npm run build
 

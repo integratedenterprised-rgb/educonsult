@@ -2,6 +2,8 @@ import { z } from "zod";
 import { getPageBySlug, getHomepage } from "@/server/cms/page.service";
 import { ApiErrors, ok } from "@/server/api/response";
 
+export const dynamic = "force-dynamic";
+
 const querySchema = z.object({ slug: z.string().optional() });
 
 export async function GET(req: Request) {

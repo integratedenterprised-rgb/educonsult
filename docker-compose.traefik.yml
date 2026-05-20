@@ -1,0 +1,20 @@
+# Overlay for hosts where Traefik (Docker provider) fronts the public domain.
+# Usage on the VPS:
+#   docker compose -f docker-compose.yml -f docker-compose.traefik.yml \
+#       --env-file .env.production up -d --build
+#
+# Requires the `traefik-net` external bridge network to already exist (it
+# is created by the host's traefik docker-compose project).
+
+name: aeroabroad-app
+
+services:
+  app:
+    container_name: aeroabroad-app
+    networks:
+      - internal
+      - traefik-net
+
+networks:
+  traefik-net:
+    external: true

@@ -22,7 +22,7 @@
  */
 import "server-only";
 import type { Prisma } from "@prisma/client";
-import { unstable_after } from "next/server";
+import { after } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { scoreLead } from "./scoring";
 import { autoAssignCounsellor } from "./assignment";
@@ -211,11 +211,11 @@ export async function submitPublicLead(
     }
   }
 
-  // 5. Notify — deferred via `unstable_after` so a slow SMTP/WhatsApp dispatch
+  // 5. Notify — deferred via `after` so a slow SMTP/WhatsApp dispatch
   //    can't bottleneck form submission AND so the serverless runtime keeps
   //    the function warm until the promise settles (a plain fire-and-forget
   //    would be cut off on Vercel as soon as the response is returned).
-  unstable_after(async () => {
+  after(async () => {
     try {
       await dispatchLeadNotifications({
         leadId: lead.id,
@@ -229,11 +229,11 @@ export async function submitPublicLead(
   // 6. Analytics — attach this visitor's sessions to the lead and emit the
   //    lifecycle event. Best-effort; never blocks intake. Also deferred so
   //    the DB write completes even after the response is sent.
-  unstable_after(async () => {
+  after(async () => {
     try { await attachSessionToLead(ctx.anonId, ctx.sessionId, lead.id); }
     catch (e) { console.error("attachSessionToLead failed", e); }
   });
-  unstable_after(async () => {
+  after(async () => {
     try {
       await recordServerEvent({
         type: dedupeMatch ? "LEAD_DEDUPLICATED" : "LEAD_CREATED",

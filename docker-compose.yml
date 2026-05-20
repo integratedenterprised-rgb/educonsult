@@ -99,14 +99,14 @@ services:
       # add a `/media` path rule to deploy/k3s/20-ingress.yaml. Until then
       # this URL is unused (no media exists yet).
       S3_PUBLIC_URL_BASE: https://aeroabroad.com.np/media
-    # Expose ONLY on loopback. The k3s ingress on the host reaches us via
-    # 127.0.0.1:3001 → routed in by deploy/k3s/endpoints.yaml.
-    ports:
-      - "127.0.0.1:3001:3000"
+    # No host port binding — the public reverse proxy (Traefik or k3s
+    # ingress, depending on host) reaches the app via a docker network.
+    # See docker-compose.traefik.yml for the Traefik-host overlay.
     # Apply Prisma migrations on every start. `migrate deploy` only runs
     # committed migrations — it never drops or auto-alters production data.
-    command: >
-      sh -c "npx prisma migrate deploy && node server.js"
+    # Invoke prisma's JS entrypoint directly (the .bin shim isn't copied
+    # into the standalone runner image).
+    command: ["sh", "-c", "node node_modules/prisma/build/index.js migrate deploy && node server.js"]
     networks:
       - internal
 
